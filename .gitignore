@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.trace
+*.trace/
+traces/
+.env
+.DS_Store
