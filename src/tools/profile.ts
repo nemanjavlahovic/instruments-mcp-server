@@ -42,12 +42,24 @@ Requires a running app or a path to launch.`,
         });
 
         const tocXml = await xctraceExport({ inputPath: tracePath, toc: true });
-        const tableXpath = findTableXpath(tocXml, "time-profile");
-        const tableXml = tableXpath
-          ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath })
-          : tocXml;
 
-        const result = parseTimeProfiler(tocXml, tableXml);
+        // Try time-profile first (aggregated data with function names)
+        const profileXpath = findTableXpath(tocXml, "time-profile");
+        let tableXml: string | undefined;
+        if (profileXpath) {
+          tableXml = await xctraceExport({ inputPath: tracePath, xpath: profileXpath });
+        }
+
+        // If time-profile table was empty, fall back to time-sample (xctrace 26+ Deferred mode)
+        let result = parseTimeProfiler(tocXml, tableXml || tocXml);
+        if (result.totalSamples === 0) {
+          const sampleXpath = findTableXpath(tocXml, "time-sample");
+          if (sampleXpath) {
+            const sampleXml = await xctraceExport({ inputPath: tracePath, xpath: sampleXpath });
+            result = parseTimeProfiler(tocXml, sampleXml);
+          }
+        }
+
         return {
           content: [
             {

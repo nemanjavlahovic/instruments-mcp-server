@@ -92,6 +92,7 @@ export async function xctraceRecord(options: RecordOptions): Promise<{ tracePath
 
 /**
  * Export trace data as XML.
+ * Retries on intermittent "Document Missing Template Error" (xctrace 26+).
  */
 export async function xctraceExport(options: ExportOptions): Promise<string> {
   const args: string[] = ["export", "--input", options.inputPath];
@@ -102,12 +103,34 @@ export async function xctraceExport(options: ExportOptions): Promise<string> {
     args.push("--xpath", options.xpath);
   }
 
-  const { stdout } = await execFileAsync(XCTRACE_PATH, args, {
-    timeout: 120_000, // exports can be large
-    maxBuffer: 50 * 1024 * 1024, // 50MB buffer
-  });
+  const maxRetries = 5;
+  let lastError: unknown;
 
-  return stdout;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const { stdout, stderr } = await execFileAsync(XCTRACE_PATH, args, {
+        timeout: 120_000,
+        maxBuffer: 50 * 1024 * 1024,
+      });
+
+      // Verify we got valid XML output (not just an error message)
+      if (stdout.includes("<?xml") || stdout.includes("<trace-")) {
+        return stdout;
+      }
+
+      // xctrace sometimes writes errors to stdout instead of failing
+      lastError = new Error(stderr || stdout || "Empty export output");
+    } catch (e) {
+      lastError = e;
+    }
+
+    // Brief pause before retry
+    if (attempt < maxRetries) {
+      await new Promise((resolve) => setTimeout(resolve, 200 * attempt));
+    }
+  }
+
+  throw lastError;
 }
 
 /**

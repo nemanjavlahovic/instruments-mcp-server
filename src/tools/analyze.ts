@@ -122,13 +122,23 @@ Returns a combined report with actionable findings.`,
           timeLimit: duration,
         });
         const tocXml = await xctraceExport({ inputPath: cpuTrace, toc: true });
-        const tableXpath = findSchema(tocXml, "time-profile");
-        const tableXml = tableXpath
-          ? await xctraceExport({ inputPath: cpuTrace, xpath: tableXpath })
+        const { parseTimeProfiler } = await import("../parsers/time-profiler.js");
+
+        // Try time-profile first, fall back to time-sample
+        const profileXpath = findSchema(tocXml, "time-profile");
+        const tableXml = profileXpath
+          ? await xctraceExport({ inputPath: cpuTrace, xpath: profileXpath })
           : tocXml;
 
-        const { parseTimeProfiler } = await import("../parsers/time-profiler.js");
-        results.cpu = parseTimeProfiler(tocXml, tableXml);
+        let cpuResult = parseTimeProfiler(tocXml, tableXml);
+        if (cpuResult.totalSamples === 0) {
+          const sampleXpath = findSchema(tocXml, "time-sample");
+          if (sampleXpath) {
+            const sampleXml = await xctraceExport({ inputPath: cpuTrace, xpath: sampleXpath });
+            cpuResult = parseTimeProfiler(tocXml, sampleXml);
+          }
+        }
+        results.cpu = cpuResult;
       } catch (e) {
         results.cpu = { error: String(e) };
       }

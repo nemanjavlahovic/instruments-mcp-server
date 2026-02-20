@@ -67,31 +67,23 @@ export function parseSwiftUI(tocXml: string, tableXml: string): SwiftUIProfileRe
 }
 
 function findRows(data: Record<string, unknown>): Array<Record<string, unknown>> {
-  const paths = [
-    "trace-query-result.node",
-    "trace-query-result.row",
-    "table.row",
-  ];
-
-  for (const path of paths) {
-    const rows = getPath(data, path);
-    if (Array.isArray(rows)) return rows as Array<Record<string, unknown>>;
-  }
-
-  return findRowsDeep(data);
-}
-
-function findRowsDeep(obj: unknown, depth = 0): Array<Record<string, unknown>> {
-  if (depth > 10 || obj == null) return [];
-  if (Array.isArray(obj) && obj.length > 0 && typeof obj[0] === "object") {
-    return obj as Array<Record<string, unknown>>;
-  }
-  if (typeof obj === "object") {
-    for (const value of Object.values(obj as Record<string, unknown>)) {
-      const result = findRowsDeep(value, depth + 1);
-      if (result.length > 0) return result;
+  // xctrace exports: <trace-query-result><node><schema/><row/>...</node></trace-query-result>
+  const nodes = getPath(data, "trace-query-result.node");
+  if (Array.isArray(nodes)) {
+    for (const node of nodes) {
+      if (node && typeof node === "object" && "row" in (node as Record<string, unknown>)) {
+        const rows = (node as Record<string, unknown>)["row"];
+        if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
+      }
     }
   }
+
+  const fallbackPaths = ["trace-query-result.row", "table.row"];
+  for (const path of fallbackPaths) {
+    const rows = getPath(data, path);
+    if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
+  }
+
   return [];
 }
 
