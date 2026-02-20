@@ -90,17 +90,22 @@ Add to your project's `.mcp.json`:
 
 ## Example Output
 
-### CPU Profiling
+### CPU Profiling (aggregated)
+
+When function names are available (symbolicated traces):
 
 ```json
 {
   "template": "Time Profiler",
   "totalSamples": 4521,
+  "duration": "unknown",
   "hotspots": [
     {
       "function": "FeedViewModel.loadItems()",
       "module": "MyApp",
       "file": "FeedViewModel.swift",
+      "selfWeight": 823,
+      "totalWeight": 1089,
       "selfPercent": 18.3,
       "totalPercent": 24.1
     }
@@ -113,6 +118,31 @@ Add to your project's `.mcp.json`:
     }
   ],
   "summary": "Hottest function: FeedViewModel.loadItems() (18.3% CPU). 5 user-code hotspots identified. 1 critical main-thread blockers found."
+}
+```
+
+### CPU Profiling (raw samples, no dSYMs)
+
+When traces lack debug symbols, falls back to thread-level analysis:
+
+```json
+{
+  "template": "Time Profiler",
+  "totalSamples": 34,
+  "duration": "unknown",
+  "hotspots": [],
+  "threads": [
+    {
+      "name": "Main Thread 0x1ed4d4 (MyApp, pid: 98601)",
+      "sampleCount": 12,
+      "runningCount": 3,
+      "blockedCount": 9,
+      "utilizationPercent": 25
+    }
+  ],
+  "mainThreadBlockers": [],
+  "summary": "34 CPU samples across 8 threads. Main thread: 25% active (3 running, 9 blocked).",
+  "needsSymbolication": true
 }
 ```
 

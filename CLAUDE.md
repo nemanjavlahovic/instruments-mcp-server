@@ -1,7 +1,7 @@
 # instruments-mcp-server
 
 ## What This Is
-An MCP server that wraps Apple's `xctrace` CLI (Instruments) to provide AI-readable performance profiling for iOS/macOS apps. Instead of dumping raw XML, it parses trace data into structured JSON with severity classifications and actionable summaries.
+An MCP server that wraps Xcode Instruments (`xctrace` CLI) to provide AI-readable performance profiling for iOS/macOS apps. Instead of dumping raw XML, it parses trace data into structured JSON with severity classifications and actionable summaries.
 
 ## Architecture
 - **src/index.ts** - MCP server entry point, registers all tools
@@ -21,6 +21,13 @@ An MCP server that wraps Apple's `xctrace` CLI (Instruments) to provide AI-reada
 2. Export a parse function that takes TOC XML + table XML and returns structured data
 3. Add a dedicated `profile_<name>` tool in `src/tools/profile.ts`
 4. Include severity classification and a text summary
+
+## xctrace Compatibility
+- xctrace 26+ uses Deferred recording mode by default — `time-profile` table may be empty
+- `profile_cpu` and `performance_audit` fall back to `time-sample` table automatically
+- `xctraceExport` retries up to 5 times for intermittent "Document Missing Template Error"
+- XML parser `isArray` config wraps `node`, `row`, `frame`, `backtrace` etc. in arrays — always unwrap [0]
+- xctrace 26 backtrace frames use `@_name` for function names and nested `binary.@_name` for module
 
 ## Tech Stack
 - TypeScript, Node.js >= 20, ESM modules
