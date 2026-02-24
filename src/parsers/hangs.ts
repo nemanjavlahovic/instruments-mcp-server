@@ -1,5 +1,5 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, isRow, type Row } from "../utils/extractors.js";
+import { extractRows, extractStr, isRow, parseFmtDuration, type Row } from "../utils/extractors.js";
 
 export interface HangEvent {
   duration: string;
@@ -17,6 +17,7 @@ export interface HangsResult {
   warningHangs: number;
   criticalHangs: number;
   hangs: HangEvent[];
+  severity: "ok" | "warning" | "critical";
   summary: string;
 }
 
@@ -46,6 +47,9 @@ export function parseHangs(tocXml: string, tableXml: string): HangsResult {
 
   const summary = buildHangsSummary(totalHangs, criticalHangs, warningHangs, hangs);
 
+  const severity: "ok" | "warning" | "critical" =
+    criticalHangs > 0 ? "critical" : warningHangs > 0 ? "warning" : "ok";
+
   return {
     template: "Animation Hitches",
     totalHangs,
@@ -54,6 +58,7 @@ export function parseHangs(tocXml: string, tableXml: string): HangsResult {
     warningHangs,
     criticalHangs,
     hangs: hangs.slice(0, 20),
+    severity,
     summary,
   };
 }
@@ -63,9 +68,32 @@ export function parseHangs(tocXml: string, tableXml: string): HangsResult {
 function extractDurationMs(row: Row): number {
   for (const key of ["duration", "hang-duration", "hitch-duration", "time"]) {
     const val = row[key] ?? row[`@_${key}`];
-    if (val != null) {
-      const num = Number(val);
-      if (!isNaN(num)) return num > 1000 ? num / 1_000_000 : num;
+    if (val == null) continue;
+
+    // Object form: { "#text": nanoseconds, "@_fmt": "500 ms" }
+    if (isRow(val)) {
+      // Prefer formatted string — it's unambiguous
+      const fmt = val["@_fmt"];
+      if (typeof fmt === "string") {
+        const ms = parseFmtDuration(fmt);
+        if (ms > 0) return ms;
+      }
+      // Fall back to raw #text value (nanoseconds in xctrace)
+      const rawText = val["#text"];
+      if (rawText != null) {
+        const ns = Number(rawText);
+        if (!isNaN(ns)) return ns / 1_000_000;
+      }
+      continue;
+    }
+
+    // Plain numeric value
+    const num = Number(val);
+    if (!isNaN(num)) {
+      // xctrace nanosecond values are >= 1_000_000 (1ms).
+      // Realistic hang durations in ms are < 100_000 (100s).
+      // Use 1_000_000 as threshold: above = nanoseconds, at or below = milliseconds.
+      return num >= 1_000_000 ? num / 1_000_000 : num;
     }
   }
   return 0;

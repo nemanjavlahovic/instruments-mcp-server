@@ -38,7 +38,10 @@ InstrumentsMCP wraps `xctrace` as an MCP server that **records, parses, classifi
 | `profile_memory` | Memory by category, persistent vs transient, largest allocators | >50MB or >100k allocs critical |
 | `profile_hitches` | Animation hangs with backtraces and duration classification | >1s critical, >250ms warning |
 | `profile_launch` | App launch time, phase breakdown, cold/warm/resume detection | >1s cold critical, >500ms warm critical |
-| `performance_audit` | Combined CPU + hitch check in one call | All of the above |
+| `profile_energy` | Energy impact scores (0–20), per-component breakdown, thermal state | Avg ≥12 or peak ≥18 critical |
+| `profile_leaks` | Leaked objects by type, sizes, responsible libraries | >100 leaks or >1MB critical |
+| `profile_network` | HTTP traffic: request counts, durations, error rates, per-domain breakdown | >10% errors or >5s response critical |
+| `performance_audit` | Combined CPU + Hitches + Leaks + Energy + Network health check | Worst severity across all five |
 | `profile_raw` | Any template — raw table of contents for custom analysis | — |
 
 ## Quick Example
@@ -179,8 +182,11 @@ When traces lack debug symbols, falls back to thread-level analysis:
 | `profile_memory` | Allocations | Memory usage by category, persistent vs transient, largest allocators |
 | `profile_hitches` | Animation Hitches | Hang events by severity with backtraces |
 | `profile_launch` | App Launch | Launch time, phases, cold/warm/resume classification |
+| `profile_energy` | Energy Log | Energy impact scores, component breakdown, thermal state |
+| `profile_leaks` | Leaks | Leaked objects by type, sizes, responsible libraries |
+| `profile_network` | Network | HTTP request counts, durations, error rates, per-domain breakdown |
 | `profile_raw` | Any | Raw table of contents for templates without a dedicated parser |
-| `performance_audit` | Time Profiler + Hitches | Combined health check in one call |
+| `performance_audit` | CPU + Hitches + Leaks + Energy + Network | Combined 5-profile health check |
 
 ### Analysis
 
@@ -188,6 +194,8 @@ When traces lack debug symbols, falls back to thread-level analysis:
 |---|---|
 | `analyze_trace` | Export specific tables from existing `.trace` files by xpath |
 | `symbolicate_trace` | Add debug symbols so function names appear instead of addresses |
+| `performance_baseline` | Save, compare, list, or delete performance baselines for regression tracking |
+| `performance_report` | Generate shareable Markdown performance reports from profile results |
 
 ### Discovery
 
@@ -238,16 +246,22 @@ Same configuration — point to `dist/index.js` using your client's MCP server s
 src/
 ├── index.ts              # MCP server entry point
 ├── tools/
-│   ├── profile.ts        # Recording tools (cpu, swiftui, memory, hitches, raw)
+│   ├── profile.ts        # Recording tools (cpu, swiftui, memory, hitches, launch, energy, leaks, network, raw)
 │   ├── analyze.ts        # Trace analysis + symbolication + performance audit
+│   ├── baseline.ts       # Baseline comparison + Markdown report generation
 │   └── list.ts           # Discovery tools (status, templates, devices)
 ├── parsers/
 │   ├── time-profiler.ts  # CPU hotspot extraction with caller aggregation
 │   ├── swiftui.ts        # View body evaluation frequency analysis
 │   ├── allocations.ts    # Memory allocation categorization
-│   └── hangs.ts          # Hang/hitch severity classification
+│   ├── hangs.ts          # Hang/hitch severity classification
+│   ├── app-launch.ts     # App launch phase breakdown
+│   ├── energy.ts         # Energy impact analysis
+│   ├── leaks.ts          # Memory leak detection
+│   └── network.ts        # HTTP traffic analysis
 └── utils/
     ├── xctrace.ts        # xctrace CLI wrapper with retry logic
+    ├── extractors.ts     # Shared XML row/field extractors
     └── xml.ts            # XML parsing (fast-xml-parser)
 ```
 

@@ -333,12 +333,18 @@ function compareMetrics(
     if (bVal == null || cVal == null) continue;
 
     const delta = Math.round((cVal - bVal) * 100) / 100;
-    const deltaPct = bVal !== 0 ? Math.round((delta / Math.abs(bVal)) * 100 * 10) / 10 : 0;
+    const deltaPct = bVal !== 0 ? Math.round((delta / Math.abs(bVal)) * 100 * 10) / 10 : NaN;
 
     // For performance metrics, lower is generally better
-    // Within 5% is considered unchanged (noise threshold)
     let status: "improved" | "regressed" | "unchanged";
-    if (Math.abs(deltaPct) < 5) {
+    if (bVal === 0 && cVal === 0) {
+      // Both zero — no change
+      status = "unchanged";
+    } else if (bVal === 0) {
+      // Baseline was zero, current is non-zero — always a regression
+      status = cVal > 0 ? "regressed" : "improved";
+    } else if (Math.abs(deltaPct) < 5) {
+      // Within 5% noise threshold
       status = "unchanged";
     } else if (delta < 0) {
       status = "improved"; // value went down = better
@@ -351,7 +357,7 @@ function compareMetrics(
       baseline: bVal,
       current: cVal,
       delta,
-      deltaPct,
+      deltaPct: isNaN(deltaPct) ? 0 : deltaPct,
       status,
     });
   }
@@ -539,6 +545,12 @@ function extractReportMetrics(result: Record<string, unknown>): Array<[string, s
       addMetric(metrics, result, "errorRate", "Error Rate", "%");
       break;
 
+    case "Animation Hitches":
+      addMetric(metrics, result, "totalHangs", "Total Hangs");
+      addMetric(metrics, result, "criticalHangs", "Critical Hangs");
+      addMetric(metrics, result, "warningHangs", "Warning Hangs");
+      break;
+
     default:
       // Generic: show all numeric top-level values
       for (const [key, value] of Object.entries(result)) {
@@ -580,7 +592,7 @@ function generateRecommendations(results: Array<Record<string, unknown>>): strin
 
   for (const result of results) {
     const template = result.template as string;
-    const severity = result.severity as string;
+    const severity = (result.severity as string) || "ok";
 
     if (severity === "ok") continue;
 
@@ -630,6 +642,14 @@ function generateRecommendations(results: Array<Record<string, unknown>>): strin
           recs.push("Network performance issues — investigate slow endpoints, reduce payload sizes, add caching");
         } else {
           recs.push("Some network requests are slow — review API response times and consider preloading");
+        }
+        break;
+
+      case "Animation Hitches":
+        if (severity === "critical") {
+          recs.push("Critical animation hangs detected (>1s) — profile with Time Profiler to find main thread blockers");
+        } else {
+          recs.push("Animation hitches detected — review main thread work during scrolling and animations");
         }
         break;
 

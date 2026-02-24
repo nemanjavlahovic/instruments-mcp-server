@@ -264,7 +264,9 @@ function findSchema(tocXml: string, keyword: string): string | null {
   const match = tocXml.match(new RegExp(`schema="([^"]*${keyword}[^"]*)"`, "i"));
   if (!match) return null;
   const schema = match[1];
-  return `/trace-toc/run[@number="1"]/data/table[@schema="${schema}"]`;
+  const runMatch = tocXml.match(/<run\s+number="(\d+)"/);
+  const runNumber = runMatch ? runMatch[1] : "1";
+  return `/trace-toc/run[@number="${runNumber}"]/data/table[@schema="${schema}"]`;
 }
 
 /**
@@ -277,7 +279,7 @@ function findTrackXpath(tocXml: string, schemaKeyword: string): string | null {
   if (!match) return null;
 
   const schema = match[1];
-  const runMatch = tocXml.match(/run\[@number="(\d+)"\]/);
+  const runMatch = tocXml.match(/<run\s+number="(\d+)"/);
   const runNumber = runMatch ? runMatch[1] : "1";
 
   return `/trace-toc/run[@number="${runNumber}"]/tracks/track/details/detail[@schema="${schema}"]`;
@@ -285,6 +287,8 @@ function findTrackXpath(tocXml: string, schemaKeyword: string): string | null {
 
 /**
  * Determine the worst severity across all audit results.
+ * Checks top-level `severity` field on each parser result.
+ * Skips error entries (profiles that failed to record/parse).
  * Returns "critical" if any result is critical, "warning" if any is warning, otherwise "ok".
  */
 function computeOverallSeverity(
@@ -294,7 +298,11 @@ function computeOverallSeverity(
   let worst = 0;
 
   for (const value of Object.values(results)) {
-    if (value && typeof value === "object" && "severity" in value) {
+    if (!value || typeof value !== "object") continue;
+    // Skip error entries — a failed profile shouldn't mask real issues
+    if ("error" in value) continue;
+
+    if ("severity" in value) {
       const severity = (value as { severity: string }).severity;
       const level = severityOrder[severity] ?? 0;
       if (level > worst) worst = level;

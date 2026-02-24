@@ -67,6 +67,7 @@ describe("parseTimeProfiler", () => {
     expect(topHotspot.module).toBe("MyApp");
     expect(topHotspot.selfWeight).toBeGreaterThan(0);
     expect(topHotspot.selfPercent).toBeGreaterThan(0);
+    expect(result.severity).toBeDefined();
     expect(result.summary).toBeTruthy();
   });
 
@@ -105,6 +106,7 @@ describe("parseTimeProfiler", () => {
     expect(mainThread!.sampleCount).toBe(2);
     expect(mainThread!.runningCount).toBe(1);
     expect(mainThread!.blockedCount).toBe(1);
+    expect(result.severity).toBeDefined();
     expect(result.summary).toContain("Main thread");
   });
 
@@ -115,6 +117,7 @@ describe("parseTimeProfiler", () => {
     expect(result.totalSamples).toBe(0);
     expect(result.hotspots).toEqual([]);
     expect(result.mainThreadBlockers).toEqual([]);
+    expect(result.severity).toBe("ok");
     expect(result.summary).toContain("No profiling samples");
   });
 });
@@ -224,9 +227,7 @@ describe("parseAllocations", () => {
 
 describe("parseHangs", () => {
   it("parses hang events with severity classification", () => {
-    // The hangs parser treats values > 1000 as nanoseconds (divides by 1_000_000).
-    // So to get durations in ms: use values <= 1000 directly, or use large ns values.
-    // 50 => 50ms (micro), 300 => 300ms (warning), 1500000000 => 1500ms (critical)
+    // 50 => 50ms (micro), 300 => 300ms (warning), 1500000000 => 1500ms (critical, nanoseconds)
     const tableXml = wrapRows(`
       <row>
         <duration>50</duration>
@@ -260,8 +261,42 @@ describe("parseHangs", () => {
     expect(result.hangs[2].durationMs).toBe(50);
     expect(result.hangs[2].severity).toBe("micro");
 
+    // Top-level severity reflects worst hang
+    expect(result.severity).toBe("critical");
     expect(result.summary).toContain("3 hang events");
     expect(result.summary).toContain("CRITICAL");
+  });
+
+  it("parses object-form durations with @_fmt (xctrace 26+)", () => {
+    // xctrace 26 exports durations as: <duration fmt="500 ms">500000000</duration>
+    // fast-xml-parser parses this as { "#text": "500000000", "@_fmt": "500 ms" }
+    const tableXml = wrapRows(`
+      <row>
+        <duration fmt="500 ms">500000000</duration>
+        <start>0:00.100</start>
+      </row>
+      <row>
+        <duration fmt="1.5 s">1500000000</duration>
+        <start>0:01.000</start>
+      </row>
+      <row>
+        <hang-duration fmt="50 ms">50000000</hang-duration>
+        <start>0:03.000</start>
+      </row>
+    `);
+
+    const result = parseHangs(EMPTY_TOC, tableXml);
+
+    expect(result.totalHangs).toBe(3);
+    // Sorted descending: 1500ms, 500ms, 50ms
+    expect(result.hangs[0].durationMs).toBe(1500);
+    expect(result.hangs[0].severity).toBe("critical");
+    expect(result.hangs[1].durationMs).toBe(500);
+    expect(result.hangs[1].severity).toBe("warning");
+    expect(result.hangs[2].durationMs).toBe(50);
+    expect(result.hangs[2].severity).toBe("micro");
+
+    expect(result.severity).toBe("critical");
   });
 
   it("classifies minor hangs (100-250ms)", () => {
@@ -275,6 +310,20 @@ describe("parseHangs", () => {
     const result = parseHangs(EMPTY_TOC, tableXml);
     expect(result.minorHangs).toBe(1);
     expect(result.hangs[0].severity).toBe("minor");
+    expect(result.severity).toBe("ok");
+  });
+
+  it("has warning top-level severity when worst hang is warning", () => {
+    const tableXml = wrapRows(`
+      <row>
+        <duration>300</duration>
+        <start>0:00.100</start>
+      </row>
+    `);
+
+    const result = parseHangs(EMPTY_TOC, tableXml);
+    expect(result.warningHangs).toBe(1);
+    expect(result.severity).toBe("warning");
   });
 
   it("returns empty result with no rows", () => {
@@ -283,6 +332,7 @@ describe("parseHangs", () => {
     expect(result.template).toBe("Animation Hitches");
     expect(result.totalHangs).toBe(0);
     expect(result.hangs).toEqual([]);
+    expect(result.severity).toBe("ok");
     expect(result.summary).toContain("No hangs");
   });
 });

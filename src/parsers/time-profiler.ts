@@ -31,6 +31,7 @@ export interface TimeProfileResult {
     durationMs: number;
     severity: "info" | "warning" | "critical";
   }>;
+  severity: "ok" | "warning" | "critical";
   summary: string;
   needsSymbolication?: boolean;
 }
@@ -50,6 +51,7 @@ export function parseTimeProfiler(tocXml: string, tableXml: string): TimeProfile
       duration: "unknown",
       hotspots: [],
       mainThreadBlockers: [],
+      severity: "ok",
       summary: "No profiling samples captured. The app may have been idle during recording.",
     };
   }
@@ -140,12 +142,20 @@ function parseAggregatedProfile(rows: Row[]): TimeProfileResult {
       severity: (h.selfPercent > 15 ? "critical" : h.selfPercent > 8 ? "warning" : "info") as "info" | "warning" | "critical",
     }));
 
+  const severity: "ok" | "warning" | "critical" =
+    mainThreadBlockers.some((b) => b.severity === "critical")
+      ? "critical"
+      : mainThreadBlockers.some((b) => b.severity === "warning")
+        ? "warning"
+        : "ok";
+
   return {
     template: "Time Profiler",
     totalSamples,
     duration: "unknown",
     hotspots,
     mainThreadBlockers,
+    severity,
     summary: buildSummary(hotspots, mainThreadBlockers),
   };
 }
@@ -208,6 +218,10 @@ function parseTimeSamples(rows: Row[]): TimeProfileResult {
 
   parts.push("Note: Raw sample data — use symbolicate_trace with dSYMs for function-level detail");
 
+  // For raw samples: main thread mostly blocked (>80%) with no hotspots = can't assess
+  const mainThreadMostlyIdle = mainThreadBlocked > mainThreadSamples * 0.8;
+  const severity: "ok" | "warning" | "critical" = mainThreadMostlyIdle ? "ok" : "warning";
+
   return {
     template: "Time Profiler",
     totalSamples,
@@ -215,6 +229,7 @@ function parseTimeSamples(rows: Row[]): TimeProfileResult {
     hotspots: [],
     threads,
     mainThreadBlockers: [],
+    severity,
     summary: parts.join(". ") + ".",
     needsSymbolication: true,
   };

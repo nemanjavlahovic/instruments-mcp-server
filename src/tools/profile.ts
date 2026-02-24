@@ -362,7 +362,7 @@ function findTableXpath(tocXml: string, schemaKeyword: string): string | null {
   if (!match) return null;
 
   const schema = match[1];
-  const runMatch = tocXml.match(/run\[@number="(\d+)"\]/);
+  const runMatch = tocXml.match(/<run\s+number="(\d+)"/);
   const runNumber = runMatch ? runMatch[1] : "1";
 
   return `/trace-toc/run[@number="${runNumber}"]/data/table[@schema="${schema}"]`;
@@ -377,7 +377,7 @@ function findTrackXpath(tocXml: string, schemaKeyword: string): string | null {
   if (!match) return null;
 
   const schema = match[1];
-  const runMatch = tocXml.match(/run\[@number="(\d+)"\]/);
+  const runMatch = tocXml.match(/<run\s+number="(\d+)"/);
   const runNumber = runMatch ? runMatch[1] : "1";
 
   return `/trace-toc/run[@number="${runNumber}"]/tracks/track/details/detail[@schema="${schema}"]`;
