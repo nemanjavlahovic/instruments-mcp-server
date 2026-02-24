@@ -1,4 +1,5 @@
-import { parseXml, getPath } from "../utils/xml.js";
+import { parseXml } from "../utils/xml.js";
+import { extractRows, extractStr, extractNum, type Row } from "../utils/extractors.js";
 
 export interface AllocationCategory {
   category: string;
@@ -25,14 +26,14 @@ export interface AllocationsResult {
  */
 export function parseAllocations(tocXml: string, tableXml: string): AllocationsResult {
   const tableData = parseXml(tableXml);
-  const rows = findRows(tableData);
+  const rows = extractRows(tableData);
 
   const categoryMap = new Map<string, { count: number; bytes: number; persistent: number; transient: number }>();
 
   for (const row of rows) {
-    const category = extractField(row, "category") || extractField(row, "type") || "Unknown";
+    const category = extractStr(row, "category") || extractStr(row, "type") || "Unknown";
     const size = extractNum(row, "size") || extractNum(row, "bytes") || 0;
-    const isPersistent = extractField(row, "event-type")?.includes("alloc") && !extractField(row, "event-type")?.includes("free");
+    const isPersistent = extractStr(row, "event-type")?.includes("alloc") && !extractStr(row, "event-type")?.includes("free");
 
     const existing = categoryMap.get(category);
     if (existing) {
@@ -66,7 +67,6 @@ export function parseAllocations(tocXml: string, tableXml: string): AllocationsR
     .sort((a, b) => b.totalBytes - a.totalBytes);
 
   const largestAllocations = categories.slice(0, 15);
-
   const summary = buildAllocationSummary(totalAllocations, totalBytesAllocated, categories);
 
   return {
@@ -78,43 +78,6 @@ export function parseAllocations(tocXml: string, tableXml: string): AllocationsR
     largestAllocations,
     summary,
   };
-}
-
-function findRows(data: Record<string, unknown>): Array<Record<string, unknown>> {
-  // xctrace exports: <trace-query-result><node><schema/><row/>...</node></trace-query-result>
-  const nodes = getPath(data, "trace-query-result.node");
-  if (Array.isArray(nodes)) {
-    for (const node of nodes) {
-      if (node && typeof node === "object" && "row" in (node as Record<string, unknown>)) {
-        const rows = (node as Record<string, unknown>)["row"];
-        if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-      }
-    }
-  }
-
-  const fallbackPaths = ["trace-query-result.row", "table.row"];
-  for (const path of fallbackPaths) {
-    const rows = getPath(data, path);
-    if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-  }
-
-  return [];
-}
-
-function extractField(row: Record<string, unknown>, key: string): string | null {
-  const val = row[key] ?? row[`@_${key}`];
-  if (typeof val === "string") return val;
-  if (val && typeof val === "object" && "#text" in (val as Record<string, unknown>)) {
-    return String((val as Record<string, unknown>)["#text"]);
-  }
-  return null;
-}
-
-function extractNum(row: Record<string, unknown>, key: string): number | null {
-  const val = row[key] ?? row[`@_${key}`];
-  if (val == null) return null;
-  const num = Number(val);
-  return isNaN(num) ? null : num;
 }
 
 function classifyAllocationSeverity(bytes: number, count: number): "ok" | "warning" | "critical" {

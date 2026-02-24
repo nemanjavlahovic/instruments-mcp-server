@@ -1,4 +1,5 @@
-import { parseXml, getPath } from "../utils/xml.js";
+import { parseXml } from "../utils/xml.js";
+import { extractRows, extractStr, extractFmt, extractNum, type Row } from "../utils/extractors.js";
 
 export interface CpuHotspot {
   function: string;
@@ -55,7 +56,7 @@ export function parseTimeProfiler(tocXml: string, tableXml: string): TimeProfile
 
   // Detect format: time-profile has `weight` and `backtrace` (with function names)
   // time-sample has `kperf-bt` (raw addresses) and no `weight`
-  const firstRow = rows[0] as Record<string, unknown> | undefined;
+  const firstRow = rows[0];
   const hasAggregatedData = firstRow && ("weight" in firstRow || "backtrace" in firstRow);
   const isTimeSampleFormat = !hasAggregatedData && firstRow && ("kperf-bt" in firstRow || "time-sample-kind" in firstRow);
 
@@ -68,36 +69,26 @@ export function parseTimeProfiler(tocXml: string, tableXml: string): TimeProfile
 
 /**
  * Parse aggregated time-profile table (has function names, weights).
- * In xctrace 26+, each row has a `backtrace` with `frame` elements containing function names.
  */
-function parseAggregatedProfile(rows: Array<Record<string, unknown>>): TimeProfileResult {
+function parseAggregatedProfile(rows: Row[]): TimeProfileResult {
   const totalSamples = rows.length;
 
   const functionWeights = new Map<string, { self: number; total: number; module: string; file?: string; line?: number }>();
 
   for (const row of rows) {
-    // Extract weight from the row (xctrace 26 stores it as nested object with @_fmt)
     const weight = extractWeightMs(row) || 1;
-
-    // Extract function info from backtrace frames (xctrace 26 format)
     const frames = extractBacktraceFrames(row);
-    if (frames.length > 0) {
-      // Top frame is the leaf function (where CPU was actually spent)
-      const topFrame = frames[0];
-      const fn = topFrame.name;
-      const mod = topFrame.binary;
-      const file = topFrame.file;
-      const line = topFrame.line;
 
-      const existing = functionWeights.get(fn);
+    if (frames.length > 0) {
+      const topFrame = frames[0];
+      const existing = functionWeights.get(topFrame.name);
       if (existing) {
         existing.self += weight;
         existing.total += weight;
       } else {
-        functionWeights.set(fn, { self: weight, total: weight, module: mod, file, line });
+        functionWeights.set(topFrame.name, { self: weight, total: weight, module: topFrame.binary, file: topFrame.file, line: topFrame.line });
       }
 
-      // Also count intermediate frames for total weight (callers)
       for (let i = 1; i < frames.length; i++) {
         const callerFn = frames[i].name;
         const callerExisting = functionWeights.get(callerFn);
@@ -109,10 +100,10 @@ function parseAggregatedProfile(rows: Array<Record<string, unknown>>): TimeProfi
       }
     } else {
       // Fallback: try flat row keys (older xctrace format)
-      const fn = extractFmt(row, "symbol") || extractFmt(row, "name") || extractString(row, "symbol") || extractString(row, "name") || "unknown";
-      const mod = extractFmt(row, "binary") || extractFmt(row, "library") || extractString(row, "binary") || extractString(row, "library") || "unknown";
-      const file = extractString(row, "source-path") || undefined;
-      const line = extractNumber(row, "source-line") || undefined;
+      const fn = extractFmt(row, "symbol") || extractFmt(row, "name") || extractStr(row, "symbol") || extractStr(row, "name") || "unknown";
+      const mod = extractFmt(row, "binary") || extractFmt(row, "library") || extractStr(row, "binary") || extractStr(row, "library") || "unknown";
+      const file = extractStr(row, "source-path") || undefined;
+      const line = extractNum(row, "source-line") || undefined;
 
       const existing = functionWeights.get(fn);
       if (existing) {
@@ -161,12 +152,9 @@ function parseAggregatedProfile(rows: Array<Record<string, unknown>>): TimeProfi
 
 /**
  * Parse raw time-sample table (xctrace 26+ Deferred mode).
- * Has per-sample thread state and raw backtrace addresses.
  */
-function parseTimeSamples(rows: Array<Record<string, unknown>>): TimeProfileResult {
+function parseTimeSamples(rows: Row[]): TimeProfileResult {
   const totalSamples = rows.length;
-
-  // Aggregate by thread
   const threadMap = new Map<string, { samples: number; running: number; blocked: number }>();
   let mainThreadSamples = 0;
   let mainThreadBlocked = 0;
@@ -183,11 +171,7 @@ function parseTimeSamples(rows: Array<Record<string, unknown>>): TimeProfileResu
       if (isBlocked) existing.blocked += 1;
       else existing.running += 1;
     } else {
-      threadMap.set(threadName, {
-        samples: 1,
-        running: isBlocked ? 0 : 1,
-        blocked: isBlocked ? 1 : 0,
-      });
+      threadMap.set(threadName, { samples: 1, running: isBlocked ? 0 : 1, blocked: isBlocked ? 1 : 0 });
     }
 
     if (isMainThread) {
@@ -206,7 +190,6 @@ function parseTimeSamples(rows: Array<Record<string, unknown>>): TimeProfileResu
     }))
     .sort((a, b) => b.sampleCount - a.sampleCount);
 
-  // Build summary
   const parts: string[] = [];
   parts.push(`${totalSamples} CPU samples across ${threads.length} threads`);
 
@@ -237,25 +220,7 @@ function parseTimeSamples(rows: Array<Record<string, unknown>>): TimeProfileResu
   };
 }
 
-function extractRows(data: Record<string, unknown>): Array<Record<string, unknown>> {
-  const nodes = getPath(data, "trace-query-result.node");
-  if (Array.isArray(nodes)) {
-    for (const node of nodes) {
-      if (node && typeof node === "object" && "row" in (node as Record<string, unknown>)) {
-        const rows = (node as Record<string, unknown>)["row"];
-        if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-      }
-    }
-  }
-
-  const fallbackPaths = ["trace-query-result.row", "table.row", "run.data.table.row"];
-  for (const path of fallbackPaths) {
-    const rows = getPath(data, path);
-    if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-  }
-
-  return [];
-}
+// ── Time Profiler specific helpers ──────────────────────────────────
 
 interface FrameInfo {
   name: string;
@@ -264,41 +229,34 @@ interface FrameInfo {
   line?: number;
 }
 
-/**
- * Extract backtrace frames from a time-profile row (xctrace 26 format).
- * `backtrace` is wrapped in array (isArray config), so access [0].
- * <backtrace><frame name="funcName" addr="0x..."><binary name="lib"/></frame>...</backtrace>
- */
-function extractBacktraceFrames(row: Record<string, unknown>): FrameInfo[] {
+function extractBacktraceFrames(row: Row): FrameInfo[] {
   let bt = row["backtrace"];
   if (!bt) return [];
-
-  // backtrace is an array (from isArray config) — unwrap first element
   if (Array.isArray(bt)) bt = bt[0];
   if (!bt || typeof bt !== "object") return [];
 
-  const btObj = bt as Record<string, unknown>;
+  const btObj = bt as Row;
   let frames = btObj["frame"];
   if (!frames) return [];
   if (!Array.isArray(frames)) frames = [frames];
 
-  return (frames as Array<Record<string, unknown>>).map((frame) => {
+  return (frames as Row[]).map((frame) => {
     const name = (frame["@_name"] as string) || "unknown";
     let binary = "unknown";
     const binObj = frame["binary"];
     if (binObj && typeof binObj === "object") {
-      binary = ((binObj as Record<string, unknown>)["@_name"] as string) || "unknown";
+      binary = ((binObj as Row)["@_name"] as string) || "unknown";
     }
 
     let file: string | undefined;
     let line: number | undefined;
     const sourceObj = frame["source"];
     if (sourceObj && typeof sourceObj === "object") {
-      const src = sourceObj as Record<string, unknown>;
+      const src = sourceObj as Row;
       line = typeof src["@_line"] === "string" ? parseInt(src["@_line"], 10) : undefined;
       const pathObj = src["path"];
       if (pathObj && typeof pathObj === "object") {
-        file = ((pathObj as Record<string, unknown>)["#text"] as string) || undefined;
+        file = ((pathObj as Row)["#text"] as string) || undefined;
       } else if (typeof pathObj === "string") {
         file = pathObj;
       }
@@ -308,23 +266,17 @@ function extractBacktraceFrames(row: Record<string, unknown>): FrameInfo[] {
   });
 }
 
-/**
- * Extract weight in milliseconds from a row.
- * xctrace 26: <weight fmt="1.00 ms">1000000</weight> (value is in nanoseconds)
- */
-function extractWeightMs(row: Record<string, unknown>): number | null {
+function extractWeightMs(row: Row): number | null {
   const val = row["weight"];
   if (!val) return null;
 
   if (typeof val === "object") {
-    const obj = val as Record<string, unknown>;
-    // Try the raw number value (nanoseconds) and convert to ms
+    const obj = val as Row;
     const rawValue = obj["#text"];
     if (rawValue != null) {
       const ns = Number(rawValue);
       if (!isNaN(ns)) return ns / 1_000_000;
     }
-    // Try the @_fmt string like "1.00 ms"
     const fmt = obj["@_fmt"] as string;
     if (fmt) {
       const match = fmt.match(/([\d.]+)\s*ms/);
@@ -335,37 +287,6 @@ function extractWeightMs(row: Record<string, unknown>): number | null {
   const num = Number(val);
   if (!isNaN(num)) return num;
   return null;
-}
-
-/**
- * Extract the @_fmt attribute from a nested element (xctrace 26 format).
- * Elements like <thread fmt="Main Thread 0x1e97f4 (rmoir-ios)"> store display values in @_fmt.
- */
-function extractFmt(row: Record<string, unknown>, key: string): string | null {
-  const val = row[key];
-  if (val && typeof val === "object") {
-    const obj = val as Record<string, unknown>;
-    if (typeof obj["@_fmt"] === "string") return obj["@_fmt"] as string;
-  }
-  return null;
-}
-
-function extractString(row: Record<string, unknown>, key: string): string | null {
-  if (typeof row[key] === "string") return row[key] as string;
-  if (typeof row[`@_${key}`] === "string") return row[`@_${key}`] as string;
-
-  const nested = row[key];
-  if (nested && typeof nested === "object" && "#text" in (nested as Record<string, unknown>)) {
-    return String((nested as Record<string, unknown>)["#text"]);
-  }
-  return null;
-}
-
-function extractNumber(row: Record<string, unknown>, key: string): number | null {
-  const val = row[key] ?? row[`@_${key}`];
-  if (val == null) return null;
-  const num = Number(val);
-  return isNaN(num) ? null : num;
 }
 
 function isSystemFrame(fn: string): boolean {

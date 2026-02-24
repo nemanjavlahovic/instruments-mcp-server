@@ -5,6 +5,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerProfileTools } from "./tools/profile.js";
 import { registerListTools } from "./tools/list.js";
 import { registerAnalyzeTools } from "./tools/analyze.js";
+import { registerBaselineTools } from "./tools/baseline.js";
 
 const server = new McpServer({
   name: "InstrumentsMCP",
@@ -15,6 +16,7 @@ const server = new McpServer({
 registerProfileTools(server);
 registerListTools(server);
 registerAnalyzeTools(server);
+registerBaselineTools(server);
 
 // Start the server
 const transport = new StdioServerTransport();

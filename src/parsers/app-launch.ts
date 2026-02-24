@@ -1,4 +1,5 @@
-import { parseXml, getPath } from "../utils/xml.js";
+import { parseXml } from "../utils/xml.js";
+import { extractRows, extractStr, extractFmt, parseFmtDuration, type Row } from "../utils/extractors.js";
 
 export interface LaunchPhase {
   name: string;
@@ -18,9 +19,6 @@ export interface AppLaunchResult {
 
 /**
  * Parse App Launch trace export XML into a structured result.
- *
- * The App Launch template records lifecycle events as os_signpost intervals.
- * Key phases include process creation, runtime init, UIKit init, initial frame rendering.
  *
  * Apple's targets for cold launch:
  *   < 400ms  = ok
@@ -57,27 +55,9 @@ export function parseAppLaunch(tocXml: string, tableXml: string): AppLaunchResul
   };
 }
 
-function extractRows(data: Record<string, unknown>): Array<Record<string, unknown>> {
-  const nodes = getPath(data, "trace-query-result.node");
-  if (Array.isArray(nodes)) {
-    for (const node of nodes) {
-      if (node && typeof node === "object" && "row" in (node as Record<string, unknown>)) {
-        const rows = (node as Record<string, unknown>)["row"];
-        if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-      }
-    }
-  }
+// ── Phase extraction ────────────────────────────────────────────────
 
-  const fallbackPaths = ["trace-query-result.row", "table.row", "run.data.table.row"];
-  for (const path of fallbackPaths) {
-    const rows = getPath(data, path);
-    if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-  }
-
-  return [];
-}
-
-function extractPhases(rows: Array<Record<string, unknown>>): LaunchPhase[] {
+function extractPhases(rows: Row[]): LaunchPhase[] {
   const phases: LaunchPhase[] = [];
   const seenPhases = new Set<string>();
 
@@ -93,27 +73,25 @@ function extractPhases(rows: Array<Record<string, unknown>>): LaunchPhase[] {
       name: normalizePhaseName(name),
       durationMs: Math.round(durationMs * 100) / 100,
       severity: classifyPhaseDuration(name, durationMs),
-      details: extractPhaseDetails(row),
+      details: extractStr(row, "message") || extractFmt(row, "message") ||
+               extractStr(row, "signpost-info") || extractFmt(row, "signpost-info") || undefined,
     });
   }
 
   return phases.sort((a, b) => b.durationMs - a.durationMs);
 }
 
-function extractPhaseName(row: Record<string, unknown>): string | null {
-  // os_signpost intervals: look for subsystem, category, name fields
+function extractPhaseName(row: Row): string | null {
   for (const key of ["subsystem", "category", "name", "signpost-name", "os-signpost-name", "event-name", "lifecycle"]) {
     const val = extractStr(row, key);
     if (val && isLaunchRelated(val)) return val;
   }
 
-  // Also check the @_fmt attribute pattern
   for (const key of ["subsystem", "category", "name"]) {
     const val = extractFmt(row, key);
     if (val && isLaunchRelated(val)) return val;
   }
 
-  // Fallback: any name-like field
   return extractStr(row, "name") || extractFmt(row, "name") || null;
 }
 
@@ -137,7 +115,6 @@ function isLaunchRelated(val: string): boolean {
 }
 
 function normalizePhaseName(name: string): string {
-  // Clean up common signpost names into readable phase names
   const mapping: Record<string, string> = {
     "process creation": "Process Creation",
     "runtime init": "Runtime Initialization",
@@ -158,32 +135,29 @@ function normalizePhaseName(name: string): string {
   return name;
 }
 
-function extractDurationMs(row: Record<string, unknown>): number {
-  // Try duration-related fields
+// ── Duration extraction ─────────────────────────────────────────────
+
+function extractDurationMs(row: Row): number {
   for (const key of ["duration", "elapsed-time", "time", "interval-duration"]) {
     const val = row[key] ?? row[`@_${key}`];
     if (val != null) {
       if (typeof val === "object") {
-        const obj = val as Record<string, unknown>;
-        // Nanoseconds value with @_fmt
+        const obj = val as Row;
         const rawValue = obj["#text"];
         if (rawValue != null) {
           const ns = Number(rawValue);
           if (!isNaN(ns)) return ns / 1_000_000;
         }
-        // Try @_fmt like "123.45 ms" or "1.23 s"
         const fmt = obj["@_fmt"] as string;
         if (fmt) return parseFmtDuration(fmt);
       }
       const num = Number(val);
       if (!isNaN(num)) {
-        // Heuristic: > 1_000_000 is probably nanoseconds
         return num > 1_000_000 ? num / 1_000_000 : num;
       }
     }
   }
 
-  // Try computing from start/end timestamps
   const start = extractTimestampMs(row, "start-time") ?? extractTimestampMs(row, "start");
   const end = extractTimestampMs(row, "end-time") ?? extractTimestampMs(row, "end");
   if (start != null && end != null && end > start) {
@@ -193,25 +167,12 @@ function extractDurationMs(row: Record<string, unknown>): number {
   return 0;
 }
 
-function parseFmtDuration(fmt: string): number {
-  const msMatch = fmt.match(/([\d.]+)\s*ms/);
-  if (msMatch) return parseFloat(msMatch[1]);
-
-  const sMatch = fmt.match(/([\d.]+)\s*s/);
-  if (sMatch) return parseFloat(sMatch[1]) * 1000;
-
-  const usMatch = fmt.match(/([\d.]+)\s*[uμ]s/);
-  if (usMatch) return parseFloat(usMatch[1]) / 1000;
-
-  return 0;
-}
-
-function extractTimestampMs(row: Record<string, unknown>, key: string): number | null {
+function extractTimestampMs(row: Row, key: string): number | null {
   const val = row[key];
   if (val == null) return null;
 
   if (typeof val === "object") {
-    const obj = val as Record<string, unknown>;
+    const obj = val as Row;
     const rawValue = obj["#text"];
     if (rawValue != null) {
       const ns = Number(rawValue);
@@ -223,35 +184,9 @@ function extractTimestampMs(row: Record<string, unknown>, key: string): number |
   return isNaN(num) ? null : (num > 1_000_000 ? num / 1_000_000 : num);
 }
 
-function extractPhaseDetails(row: Record<string, unknown>): string | undefined {
-  const message = extractStr(row, "message") || extractFmt(row, "message");
-  if (message) return message;
+// ── Launch type detection ───────────────────────────────────────────
 
-  const info = extractStr(row, "signpost-info") || extractFmt(row, "signpost-info");
-  if (info) return info;
-
-  return undefined;
-}
-
-function extractStr(row: Record<string, unknown>, key: string): string | null {
-  const val = row[key] ?? row[`@_${key}`];
-  if (typeof val === "string") return val;
-  if (val && typeof val === "object" && "#text" in (val as Record<string, unknown>)) {
-    return String((val as Record<string, unknown>)["#text"]);
-  }
-  return null;
-}
-
-function extractFmt(row: Record<string, unknown>, key: string): string | null {
-  const val = row[key];
-  if (val && typeof val === "object") {
-    const obj = val as Record<string, unknown>;
-    if (typeof obj["@_fmt"] === "string") return obj["@_fmt"] as string;
-  }
-  return null;
-}
-
-function detectLaunchType(rows: Array<Record<string, unknown>>): "cold" | "warm" | "resume" | "unknown" {
+function detectLaunchType(rows: Row[]): "cold" | "warm" | "resume" | "unknown" {
   for (const row of rows) {
     const allText = JSON.stringify(row).toLowerCase();
     if (allText.includes("cold")) return "cold";
@@ -261,8 +196,7 @@ function detectLaunchType(rows: Array<Record<string, unknown>>): "cold" | "warm"
   return "unknown";
 }
 
-function computeTotalLaunchMs(phases: LaunchPhase[], rows: Array<Record<string, unknown>>): number {
-  // If we have a phase that represents the total launch, use it
+function computeTotalLaunchMs(phases: LaunchPhase[], rows: Row[]): number {
   for (const phase of phases) {
     const lower = phase.name.toLowerCase();
     if (lower.includes("total") || lower === "app launch" || lower.includes("time to initial")) {
@@ -270,7 +204,6 @@ function computeTotalLaunchMs(phases: LaunchPhase[], rows: Array<Record<string, 
     }
   }
 
-  // Otherwise try to find the longest duration in raw rows (likely the overall interval)
   let maxDuration = 0;
   for (const row of rows) {
     const d = extractDurationMs(row);
@@ -279,7 +212,6 @@ function computeTotalLaunchMs(phases: LaunchPhase[], rows: Array<Record<string, 
 
   if (maxDuration > 0) return Math.round(maxDuration * 100) / 100;
 
-  // Fallback: sum all phase durations (rough approximation, phases may overlap)
   if (phases.length > 0) {
     return Math.round(phases.reduce((sum, p) => sum + p.durationMs, 0) * 100) / 100;
   }
@@ -287,24 +219,14 @@ function computeTotalLaunchMs(phases: LaunchPhase[], rows: Array<Record<string, 
   return 0;
 }
 
-/**
- * Apple's cold launch guidelines:
- *   < 400ms  = ok
- *   400ms–1s = warning
- *   > 1s     = critical
- *
- * Warm launch/resume have tighter budgets:
- *   < 200ms  = ok
- *   200–500ms = warning
- *   > 500ms  = critical
- */
+// ── Severity classification ─────────────────────────────────────────
+
 function classifyLaunchTime(ms: number, type: "cold" | "warm" | "resume" | "unknown"): "ok" | "warning" | "critical" {
   if (type === "warm" || type === "resume") {
     if (ms > 500) return "critical";
     if (ms > 200) return "warning";
     return "ok";
   }
-  // Cold / unknown
   if (ms > 1000) return "critical";
   if (ms > 400) return "warning";
   return "ok";
@@ -313,43 +235,35 @@ function classifyLaunchTime(ms: number, type: "cold" | "warm" | "resume" | "unkn
 function classifyPhaseDuration(name: string, ms: number): "ok" | "warning" | "critical" {
   const lower = name.toLowerCase();
 
-  // Static initializers / dylib loading should be < 50ms each
   if (lower.includes("static") || lower.includes("dylib")) {
     if (ms > 200) return "critical";
     if (ms > 50) return "warning";
     return "ok";
   }
 
-  // UIKit / runtime init should be < 100ms
   if (lower.includes("init")) {
     if (ms > 300) return "critical";
     if (ms > 100) return "warning";
     return "ok";
   }
 
-  // Initial frame rendering should be < 200ms
   if (lower.includes("frame") || lower.includes("render")) {
     if (ms > 500) return "critical";
     if (ms > 200) return "warning";
     return "ok";
   }
 
-  // Generic phase
   if (ms > 500) return "critical";
   if (ms > 200) return "warning";
   return "ok";
 }
 
-function buildSummary(
-  totalMs: number,
-  launchType: string,
-  severity: "ok" | "warning" | "critical",
-  phases: LaunchPhase[]
-): string {
+// ── Summary ─────────────────────────────────────────────────────────
+
+function buildSummary(totalMs: number, launchType: string, severity: "ok" | "warning" | "critical", phases: LaunchPhase[]): string {
   if (totalMs === 0) return "No measurable launch time. Ensure the app was launched during recording.";
 
   const parts: string[] = [];
-
   const typeLabel = launchType !== "unknown" ? ` (${launchType})` : "";
   parts.push(`App launch${typeLabel}: ${Math.round(totalMs)}ms — ${severity.toUpperCase()}`);
 

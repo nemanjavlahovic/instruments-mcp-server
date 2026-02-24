@@ -1,4 +1,5 @@
-import { parseXml, getPath } from "../utils/xml.js";
+import { parseXml } from "../utils/xml.js";
+import { extractRows, extractStr, type Row } from "../utils/extractors.js";
 
 export interface HangEvent {
   duration: string;
@@ -11,10 +12,10 @@ export interface HangEvent {
 export interface HangsResult {
   template: "Animation Hitches";
   totalHangs: number;
-  microHangs: number;   // < 100ms
-  minorHangs: number;   // 100-250ms
-  warningHangs: number; // 250ms-1s
-  criticalHangs: number; // > 1s
+  microHangs: number;
+  minorHangs: number;
+  warningHangs: number;
+  criticalHangs: number;
   hangs: HangEvent[];
   summary: string;
 }
@@ -24,7 +25,7 @@ export interface HangsResult {
  */
 export function parseHangs(tocXml: string, tableXml: string): HangsResult {
   const tableData = parseXml(tableXml);
-  const rows = findRows(tableData);
+  const rows = extractRows(tableData);
 
   const hangs: HangEvent[] = rows.map((row) => {
     const durationMs = extractDurationMs(row);
@@ -52,59 +53,31 @@ export function parseHangs(tocXml: string, tableXml: string): HangsResult {
     minorHangs,
     warningHangs,
     criticalHangs,
-    hangs: hangs.slice(0, 20), // top 20 worst hangs
+    hangs: hangs.slice(0, 20),
     summary,
   };
 }
 
-function findRows(data: Record<string, unknown>): Array<Record<string, unknown>> {
-  // xctrace exports: <trace-query-result><node><schema/><row/>...</node></trace-query-result>
-  const nodes = getPath(data, "trace-query-result.node");
-  if (Array.isArray(nodes)) {
-    for (const node of nodes) {
-      if (node && typeof node === "object" && "row" in (node as Record<string, unknown>)) {
-        const rows = (node as Record<string, unknown>)["row"];
-        if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-      }
-    }
-  }
+// ── Hangs specific helpers ──────────────────────────────────────────
 
-  const fallbackPaths = ["trace-query-result.row", "table.row"];
-  for (const path of fallbackPaths) {
-    const rows = getPath(data, path);
-    if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-  }
-
-  return [];
-}
-
-function extractStr(row: Record<string, unknown>, key: string): string | null {
-  const val = row[key] ?? row[`@_${key}`];
-  if (typeof val === "string") return val;
-  if (val && typeof val === "object" && "#text" in (val as Record<string, unknown>)) {
-    return String((val as Record<string, unknown>)["#text"]);
-  }
-  return null;
-}
-
-function extractDurationMs(row: Record<string, unknown>): number {
+function extractDurationMs(row: Row): number {
   for (const key of ["duration", "hang-duration", "hitch-duration", "time"]) {
     const val = row[key] ?? row[`@_${key}`];
     if (val != null) {
       const num = Number(val);
-      if (!isNaN(num)) return num > 1000 ? num / 1_000_000 : num; // handle ns vs ms
+      if (!isNaN(num)) return num > 1000 ? num / 1_000_000 : num;
     }
   }
   return 0;
 }
 
-function extractBacktrace(row: Record<string, unknown>): string[] | undefined {
+function extractBacktrace(row: Row): string[] | undefined {
   const bt = row["backtrace"] ?? row["stack"];
   if (Array.isArray(bt)) {
     return bt.map((frame: unknown) => {
       if (typeof frame === "string") return frame;
       if (typeof frame === "object" && frame !== null) {
-        const f = frame as Record<string, unknown>;
+        const f = frame as Row;
         return String(f["@_name"] || f["symbol"] || f["#text"] || "unknown");
       }
       return "unknown";
@@ -120,12 +93,7 @@ function classifyHang(durationMs: number): "micro" | "minor" | "warning" | "crit
   return "micro";
 }
 
-function buildHangsSummary(
-  total: number,
-  critical: number,
-  warning: number,
-  hangs: HangEvent[]
-): string {
+function buildHangsSummary(total: number, critical: number, warning: number, hangs: HangEvent[]): string {
   if (total === 0) return "No hangs or hitches detected. Smooth performance.";
 
   const parts: string[] = [];

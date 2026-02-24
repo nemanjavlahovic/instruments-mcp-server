@@ -5,8 +5,8 @@ AI-native performance profiling for iOS and macOS apps. Wraps Xcode Instruments 
 
 ## Architecture
 - **src/index.ts** - MCP server entry point, registers all tools
-- **src/tools/** - Tool definitions (profile, list, analyze)
-- **src/parsers/** - Template-specific XML→JSON parsers (time-profiler, swiftui, allocations, hangs, app-launch)
+- **src/tools/** - Tool definitions (profile, list, analyze, baseline)
+- **src/parsers/** - Template-specific XML→JSON parsers (time-profiler, swiftui, allocations, hangs, app-launch, energy, leaks, network)
 - **src/utils/xctrace.ts** - Low-level xctrace CLI wrapper
 - **src/utils/xml.ts** - XML parsing with fast-xml-parser
 

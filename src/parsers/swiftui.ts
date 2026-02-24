@@ -1,4 +1,5 @@
-import { parseXml, getPath } from "../utils/xml.js";
+import { parseXml } from "../utils/xml.js";
+import { extractRows, extractStr, type Row } from "../utils/extractors.js";
 
 export interface ViewBodyEvaluation {
   viewName: string;
@@ -22,9 +23,8 @@ export interface SwiftUIProfileResult {
  */
 export function parseSwiftUI(tocXml: string, tableXml: string): SwiftUIProfileResult {
   const tableData = parseXml(tableXml);
-  const rows = findRows(tableData);
+  const rows = extractRows(tableData);
 
-  // Aggregate by view name
   const viewMap = new Map<string, { count: number; totalDuration: number }>();
 
   for (const row of rows) {
@@ -66,45 +66,21 @@ export function parseSwiftUI(tocXml: string, tableXml: string): SwiftUIProfileRe
   };
 }
 
-function findRows(data: Record<string, unknown>): Array<Record<string, unknown>> {
-  // xctrace exports: <trace-query-result><node><schema/><row/>...</node></trace-query-result>
-  const nodes = getPath(data, "trace-query-result.node");
-  if (Array.isArray(nodes)) {
-    for (const node of nodes) {
-      if (node && typeof node === "object" && "row" in (node as Record<string, unknown>)) {
-        const rows = (node as Record<string, unknown>)["row"];
-        if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-      }
-    }
-  }
+// ── SwiftUI specific helpers ────────────────────────────────────────
 
-  const fallbackPaths = ["trace-query-result.row", "table.row"];
-  for (const path of fallbackPaths) {
-    const rows = getPath(data, path);
-    if (Array.isArray(rows) && rows.length > 0) return rows as Array<Record<string, unknown>>;
-  }
-
-  return [];
-}
-
-function extractViewName(row: Record<string, unknown>): string | null {
-  // Try various attribute names used by SwiftUI instruments
+function extractViewName(row: Row): string | null {
   for (const key of ["view-name", "symbol", "name", "type"]) {
-    const val = row[key] ?? row[`@_${key}`];
-    if (typeof val === "string") return cleanViewName(val);
-    if (val && typeof val === "object" && "#text" in (val as Record<string, unknown>)) {
-      return cleanViewName(String((val as Record<string, unknown>)["#text"]));
-    }
+    const val = extractStr(row, key);
+    if (val) return cleanViewName(val);
   }
   return null;
 }
 
 function cleanViewName(name: string): string {
-  // Remove generic parameters for readability: MyView<Int, String> -> MyView
   return name.replace(/<[^>]+>/g, "").trim();
 }
 
-function extractDuration(row: Record<string, unknown>): number {
+function extractDuration(row: Row): number {
   for (const key of ["duration", "time", "elapsed"]) {
     const val = row[key] ?? row[`@_${key}`];
     if (val != null) {
@@ -116,7 +92,6 @@ function extractDuration(row: Record<string, unknown>): number {
 }
 
 function classifySeverity(count: number, totalDurationUs: number): "ok" | "warning" | "critical" {
-  // Heuristics: views evaluated >50 times or spending >10ms total are concerning
   if (count > 100 || totalDurationUs > 50_000) return "critical";
   if (count > 30 || totalDurationUs > 10_000) return "warning";
   return "ok";
