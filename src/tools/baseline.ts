@@ -93,14 +93,29 @@ suitable for PRs, Slack, documentation, or stakeholder updates.`,
     },
     async ({ results, app_name, baseline_name }) => {
       try {
-        const parsed = JSON.parse(results);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(results);
+        } catch (e) {
+          return {
+            content: [{ type: "text" as const, text: `Invalid JSON in results parameter: ${(e as Error).message}` }],
+            isError: true,
+          };
+        }
         const resultArray: Array<Record<string, unknown>> = Array.isArray(parsed) ? parsed : [parsed];
 
         let baselineData: SavedBaseline | null = null;
         if (baseline_name) {
           const path = join(BASELINE_DIR, `${sanitizeName(baseline_name)}.json`);
           if (existsSync(path)) {
-            baselineData = JSON.parse(readFileSync(path, "utf-8"));
+            try {
+              baselineData = JSON.parse(readFileSync(path, "utf-8"));
+            } catch (e) {
+              return {
+                content: [{ type: "text" as const, text: `Baseline file is corrupted: ${(e as Error).message}. Delete and re-save it.` }],
+                isError: true,
+              };
+            }
           }
         }
 
@@ -129,7 +144,15 @@ function handleSave(name: string | undefined, metrics: string | undefined) {
     };
   }
 
-  const results = JSON.parse(metrics) as Record<string, unknown>;
+  let results: Record<string, unknown>;
+  try {
+    results = JSON.parse(metrics) as Record<string, unknown>;
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Invalid JSON in metrics parameter: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
   const extracted = extractNumericMetrics(results);
   const safeName = sanitizeName(name);
 
@@ -181,8 +204,24 @@ function handleCompare(name: string | undefined, metrics: string | undefined) {
     };
   }
 
-  const baseline: SavedBaseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
-  const currentResults = JSON.parse(metrics) as Record<string, unknown>;
+  let baseline: SavedBaseline;
+  try {
+    baseline = JSON.parse(readFileSync(baselinePath, "utf-8"));
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Baseline file is corrupted: ${(e as Error).message}. Delete and re-save it.` }],
+      isError: true,
+    };
+  }
+  let currentResults: Record<string, unknown>;
+  try {
+    currentResults = JSON.parse(metrics) as Record<string, unknown>;
+  } catch (e) {
+    return {
+      content: [{ type: "text" as const, text: `Invalid JSON in metrics parameter: ${(e as Error).message}` }],
+      isError: true,
+    };
+  }
   const currentMetrics = extractNumericMetrics(currentResults);
   const comparison = compareMetrics(baseline.metrics, currentMetrics);
   const summary = buildComparisonSummary(comparison);

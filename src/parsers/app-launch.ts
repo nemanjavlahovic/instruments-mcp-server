@@ -1,5 +1,5 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, extractFmt, parseFmtDuration, type Row } from "../utils/extractors.js";
+import { extractRows, extractStr, extractFmt, parseFmtDuration, isRow, type Row } from "../utils/extractors.js";
 
 export interface LaunchPhase {
   name: string;
@@ -141,15 +141,14 @@ function extractDurationMs(row: Row): number {
   for (const key of ["duration", "elapsed-time", "time", "interval-duration"]) {
     const val = row[key] ?? row[`@_${key}`];
     if (val != null) {
-      if (typeof val === "object") {
-        const obj = val as Row;
-        const rawValue = obj["#text"];
+      if (isRow(val)) {
+        const rawValue = val["#text"];
         if (rawValue != null) {
           const ns = Number(rawValue);
           if (!isNaN(ns)) return ns / 1_000_000;
         }
-        const fmt = obj["@_fmt"] as string;
-        if (fmt) return parseFmtDuration(fmt);
+        const fmt = val["@_fmt"];
+        if (typeof fmt === "string") return parseFmtDuration(fmt);
       }
       const num = Number(val);
       if (!isNaN(num)) {
@@ -171,9 +170,8 @@ function extractTimestampMs(row: Row, key: string): number | null {
   const val = row[key];
   if (val == null) return null;
 
-  if (typeof val === "object") {
-    const obj = val as Row;
-    const rawValue = obj["#text"];
+  if (isRow(val)) {
+    const rawValue = val["#text"];
     if (rawValue != null) {
       const ns = Number(rawValue);
       if (!isNaN(ns)) return ns / 1_000_000;

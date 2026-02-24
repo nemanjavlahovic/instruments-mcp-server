@@ -1,5 +1,5 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, extractFmt, extractNum, extractFmtNum, type Row } from "../utils/extractors.js";
+import { extractRows, extractStr, extractFmt, extractNum, extractFmtNum, isRow, type Row } from "../utils/extractors.js";
 
 export interface EnergyImpactSample {
   energyImpact: number;
@@ -113,16 +113,15 @@ function extractEnergyImpact(row: Row): number | null {
 
   for (const key of ["energy-impact", "impact", "energy"]) {
     const val = row[key];
-    if (val && typeof val === "object") {
-      const obj = val as Row;
-      const fmt = obj["@_fmt"] as string;
-      if (fmt) {
+    if (isRow(val)) {
+      const fmt = val["@_fmt"];
+      if (typeof fmt === "string") {
         const slashMatch = fmt.match(/^(\d+(?:\.\d+)?)\s*\/\s*\d+/);
         if (slashMatch) return parseFloat(slashMatch[1]);
         const numMatch = fmt.match(/^(\d+(?:\.\d+)?)/);
         if (numMatch) return parseFloat(numMatch[1]);
       }
-      const text = obj["#text"];
+      const text = val["#text"];
       if (text != null) {
         const num = Number(text);
         if (!isNaN(num)) return num;

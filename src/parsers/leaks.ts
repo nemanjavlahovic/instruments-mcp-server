@@ -1,5 +1,5 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, extractFmt, extractNum, parseSizeFmt, formatBytes, type Row } from "../utils/extractors.js";
+import { extractRows, extractStr, extractFmt, extractNum, parseSizeFmt, formatBytes, isRow, type Row } from "../utils/extractors.js";
 
 export interface LeakGroup {
   objectType: string;
@@ -133,9 +133,8 @@ function extractLibrary(row: Row): string | null {
     const val = extractStr(row, key) || extractFmt(row, key);
     if (val) return val;
     const nested = row[key];
-    if (nested && typeof nested === "object") {
-      const obj = nested as Row;
-      const name = obj["@_name"] || obj["name"];
+    if (isRow(nested)) {
+      const name = nested["@_name"] || nested["name"];
       if (typeof name === "string") return name;
     }
   }
@@ -149,13 +148,12 @@ function extractFrame(row: Row): string | null {
     const nested = row[key];
     if (Array.isArray(nested) && nested.length > 0) {
       const first = nested[0];
-      if (first && typeof first === "object") {
-        const obj = first as Row;
-        const frameName = obj["@_name"];
+      if (isRow(first)) {
+        const frameName = first["@_name"];
         if (typeof frameName === "string") return frameName;
-        const innerFrames = obj["frame"];
-        if (Array.isArray(innerFrames) && innerFrames.length > 0) {
-          const innerName = (innerFrames[0] as Row)["@_name"];
+        const innerFrames = first["frame"];
+        if (Array.isArray(innerFrames) && isRow(innerFrames[0])) {
+          const innerName = innerFrames[0]["@_name"];
           if (typeof innerName === "string") return innerName;
         }
       }

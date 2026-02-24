@@ -100,15 +100,16 @@ Run this if profile results show hex addresses instead of function names.`,
   server.tool(
     "performance_audit",
     `Run a comprehensive performance audit by recording multiple profiles in sequence.
-Records: Time Profiler + Animation Hitches for a quick health check.
-Returns a combined report with actionable findings.`,
+Records: Time Profiler + Animation Hitches + Leaks + Energy Log + Network for a full health check.
+Returns a combined report with actionable findings and an overall severity.
+Total recording time = 5x duration.`,
     {
       process: z.string().describe("Process name or PID to attach to (must be running)"),
       device: z.string().optional().describe("Device name or UDID"),
       duration: z
         .string()
         .default("10s")
-        .describe("Duration per profile (e.g., '10s'). Total time = 2x this value."),
+        .describe("Duration per profile (e.g., '10s'). Total time = 5x this value."),
     },
     async ({ process, device, duration }) => {
       const results: Record<string, unknown> = {};
@@ -163,6 +164,80 @@ Returns a combined report with actionable findings.`,
         results.hitches = { error: String(e) };
       }
 
+      // Run Leaks
+      try {
+        const { tracePath: leaksTrace } = await xctraceRecord({
+          template: "Leaks",
+          attachProcess: process,
+          device,
+          timeLimit: duration,
+        });
+        const tocXml = await xctraceExport({ inputPath: leaksTrace, toc: true });
+        const tableXpath =
+          findSchema(tocXml, "leak") ||
+          findTrackXpath(tocXml, "leak") ||
+          findSchema(tocXml, "alloc");
+        const tableXml = tableXpath
+          ? await xctraceExport({ inputPath: leaksTrace, xpath: tableXpath })
+          : tocXml;
+
+        const { parseLeaks } = await import("../parsers/leaks.js");
+        results.leaks = parseLeaks(tocXml, tableXml);
+      } catch (e) {
+        results.leaks = { error: String(e) };
+      }
+
+      // Run Energy Log
+      try {
+        const { tracePath: energyTrace } = await xctraceRecord({
+          template: "Energy Log",
+          attachProcess: process,
+          device,
+          timeLimit: duration,
+        });
+        const tocXml = await xctraceExport({ inputPath: energyTrace, toc: true });
+        const tableXpath =
+          findSchema(tocXml, "energy") ||
+          findSchema(tocXml, "power") ||
+          findSchema(tocXml, "battery") ||
+          findSchema(tocXml, "diagnostics");
+        const tableXml = tableXpath
+          ? await xctraceExport({ inputPath: energyTrace, xpath: tableXpath })
+          : tocXml;
+
+        const { parseEnergy } = await import("../parsers/energy.js");
+        results.energy = parseEnergy(tocXml, tableXml);
+      } catch (e) {
+        results.energy = { error: String(e) };
+      }
+
+      // Run Network
+      try {
+        const { tracePath: networkTrace } = await xctraceRecord({
+          template: "Network",
+          attachProcess: process,
+          device,
+          timeLimit: duration,
+        });
+        const tocXml = await xctraceExport({ inputPath: networkTrace, toc: true });
+        const tableXpath =
+          findSchema(tocXml, "http") ||
+          findSchema(tocXml, "network") ||
+          findTrackXpath(tocXml, "http") ||
+          findTrackXpath(tocXml, "network");
+        const tableXml = tableXpath
+          ? await xctraceExport({ inputPath: networkTrace, xpath: tableXpath })
+          : tocXml;
+
+        const { parseNetwork } = await import("../parsers/network.js");
+        results.network = parseNetwork(tocXml, tableXml);
+      } catch (e) {
+        results.network = { error: String(e) };
+      }
+
+      // Compute overall severity across all results
+      const overallSeverity = computeOverallSeverity(results);
+
       return {
         content: [
           {
@@ -172,6 +247,7 @@ Returns a combined report with actionable findings.`,
                 audit: "performance",
                 process,
                 durationPerProfile: duration,
+                overallSeverity,
                 results,
               },
               null,
@@ -189,4 +265,43 @@ function findSchema(tocXml: string, keyword: string): string | null {
   if (!match) return null;
   const schema = match[1];
   return `/trace-toc/run[@number="1"]/data/table[@schema="${schema}"]`;
+}
+
+/**
+ * Search the TOC XML for a track detail matching a schema keyword.
+ * Leaks and Network data may live under tracks/track/details/detail instead of data/table.
+ */
+function findTrackXpath(tocXml: string, schemaKeyword: string): string | null {
+  const detailPattern = new RegExp(`<detail[^>]*schema="([^"]*${schemaKeyword}[^"]*)"`, "i");
+  const match = tocXml.match(detailPattern);
+  if (!match) return null;
+
+  const schema = match[1];
+  const runMatch = tocXml.match(/run\[@number="(\d+)"\]/);
+  const runNumber = runMatch ? runMatch[1] : "1";
+
+  return `/trace-toc/run[@number="${runNumber}"]/tracks/track/details/detail[@schema="${schema}"]`;
+}
+
+/**
+ * Determine the worst severity across all audit results.
+ * Returns "critical" if any result is critical, "warning" if any is warning, otherwise "ok".
+ */
+function computeOverallSeverity(
+  results: Record<string, unknown>
+): "ok" | "warning" | "critical" {
+  const severityOrder: Record<string, number> = { ok: 0, warning: 1, critical: 2 };
+  let worst = 0;
+
+  for (const value of Object.values(results)) {
+    if (value && typeof value === "object" && "severity" in value) {
+      const severity = (value as { severity: string }).severity;
+      const level = severityOrder[severity] ?? 0;
+      if (level > worst) worst = level;
+    }
+  }
+
+  if (worst >= 2) return "critical";
+  if (worst >= 1) return "warning";
+  return "ok";
 }

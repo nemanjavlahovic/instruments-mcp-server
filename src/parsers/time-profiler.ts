@@ -1,5 +1,5 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, extractFmt, extractNum, type Row } from "../utils/extractors.js";
+import { extractRows, extractStr, extractFmt, extractNum, isRow, type Row } from "../utils/extractors.js";
 
 export interface CpuHotspot {
   function: string;
@@ -233,10 +233,9 @@ function extractBacktraceFrames(row: Row): FrameInfo[] {
   let bt = row["backtrace"];
   if (!bt) return [];
   if (Array.isArray(bt)) bt = bt[0];
-  if (!bt || typeof bt !== "object") return [];
+  if (!isRow(bt)) return [];
 
-  const btObj = bt as Row;
-  let frames = btObj["frame"];
+  let frames = bt["frame"];
   if (!frames) return [];
   if (!Array.isArray(frames)) frames = [frames];
 
@@ -244,19 +243,18 @@ function extractBacktraceFrames(row: Row): FrameInfo[] {
     const name = (frame["@_name"] as string) || "unknown";
     let binary = "unknown";
     const binObj = frame["binary"];
-    if (binObj && typeof binObj === "object") {
-      binary = ((binObj as Row)["@_name"] as string) || "unknown";
+    if (isRow(binObj)) {
+      binary = (binObj["@_name"] as string) || "unknown";
     }
 
     let file: string | undefined;
     let line: number | undefined;
     const sourceObj = frame["source"];
-    if (sourceObj && typeof sourceObj === "object") {
-      const src = sourceObj as Row;
-      line = typeof src["@_line"] === "string" ? parseInt(src["@_line"], 10) : undefined;
-      const pathObj = src["path"];
-      if (pathObj && typeof pathObj === "object") {
-        file = ((pathObj as Row)["#text"] as string) || undefined;
+    if (isRow(sourceObj)) {
+      line = typeof sourceObj["@_line"] === "string" ? parseInt(sourceObj["@_line"], 10) : undefined;
+      const pathObj = sourceObj["path"];
+      if (isRow(pathObj)) {
+        file = (pathObj["#text"] as string) || undefined;
       } else if (typeof pathObj === "string") {
         file = pathObj;
       }
@@ -270,15 +268,14 @@ function extractWeightMs(row: Row): number | null {
   const val = row["weight"];
   if (!val) return null;
 
-  if (typeof val === "object") {
-    const obj = val as Row;
-    const rawValue = obj["#text"];
+  if (isRow(val)) {
+    const rawValue = val["#text"];
     if (rawValue != null) {
       const ns = Number(rawValue);
       if (!isNaN(ns)) return ns / 1_000_000;
     }
-    const fmt = obj["@_fmt"] as string;
-    if (fmt) {
+    const fmt = val["@_fmt"];
+    if (typeof fmt === "string") {
       const match = fmt.match(/([\d.]+)\s*ms/);
       if (match) return parseFloat(match[1]);
     }

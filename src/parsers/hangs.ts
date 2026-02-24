@@ -1,5 +1,5 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, type Row } from "../utils/extractors.js";
+import { extractRows, extractStr, isRow, type Row } from "../utils/extractors.js";
 
 export interface HangEvent {
   duration: string;
@@ -76,9 +76,8 @@ function extractBacktrace(row: Row): string[] | undefined {
   if (Array.isArray(bt)) {
     return bt.map((frame: unknown) => {
       if (typeof frame === "string") return frame;
-      if (typeof frame === "object" && frame !== null) {
-        const f = frame as Row;
-        return String(f["@_name"] || f["symbol"] || f["#text"] || "unknown");
+      if (isRow(frame)) {
+        return String(frame["@_name"] || frame["symbol"] || frame["#text"] || "unknown");
       }
       return "unknown";
     });

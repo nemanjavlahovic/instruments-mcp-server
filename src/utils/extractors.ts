@@ -2,6 +2,11 @@ import { getPath } from "./xml.js";
 
 export type Row = Record<string, unknown>;
 
+/** Type guard for Row — checks that a value is a non-null object. */
+export function isRow(val: unknown): val is Row {
+  return val != null && typeof val === "object" && !Array.isArray(val);
+}
+
 /**
  * Extract rows from parsed xctrace XML export.
  * Handles multiple XML structures across xctrace versions:
@@ -14,8 +19,8 @@ export function extractRows(data: Record<string, unknown>): Row[] {
   const nodes = getPath(data, "trace-query-result.node");
   if (Array.isArray(nodes)) {
     for (const node of nodes) {
-      if (node && typeof node === "object" && "row" in (node as Row)) {
-        const rows = (node as Row)["row"];
+      if (isRow(node) && "row" in node) {
+        const rows = node["row"];
         if (Array.isArray(rows) && rows.length > 0) return rows as Row[];
       }
     }
@@ -42,8 +47,8 @@ export function extractRows(data: Record<string, unknown>): Row[] {
 export function extractStr(row: Row, key: string): string | null {
   const val = row[key] ?? row[`@_${key}`];
   if (typeof val === "string") return val;
-  if (val && typeof val === "object" && "#text" in (val as Row)) {
-    return String((val as Row)["#text"]);
+  if (isRow(val) && "#text" in val) {
+    return String(val["#text"]);
   }
   return null;
 }
@@ -54,9 +59,8 @@ export function extractStr(row: Row, key: string): string | null {
  */
 export function extractFmt(row: Row, key: string): string | null {
   const val = row[key];
-  if (val && typeof val === "object") {
-    const obj = val as Row;
-    if (typeof obj["@_fmt"] === "string") return obj["@_fmt"] as string;
+  if (isRow(val)) {
+    if (typeof val["@_fmt"] === "string") return val["@_fmt"];
   }
   return null;
 }
@@ -68,9 +72,8 @@ export function extractFmt(row: Row, key: string): string | null {
 export function extractNum(row: Row, key: string): number | null {
   const val = row[key] ?? row[`@_${key}`];
   if (val == null) return null;
-  if (typeof val === "object") {
-    const obj = val as Row;
-    const text = obj["#text"];
+  if (isRow(val)) {
+    const text = val["#text"];
     if (text != null) {
       const num = Number(text);
       if (!isNaN(num)) return num;
@@ -86,10 +89,9 @@ export function extractNum(row: Row, key: string): number | null {
  */
 export function extractFmtNum(row: Row, key: string): number | null {
   const val = row[key];
-  if (val && typeof val === "object") {
-    const obj = val as Row;
-    const fmt = obj["@_fmt"] as string;
-    if (fmt) {
+  if (isRow(val)) {
+    const fmt = val["@_fmt"];
+    if (typeof fmt === "string") {
       const match = fmt.match(/^(\d+(?:\.\d+)?)/);
       if (match) return parseFloat(match[1]);
     }
