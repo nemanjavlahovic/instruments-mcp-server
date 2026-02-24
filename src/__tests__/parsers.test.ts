@@ -110,6 +110,100 @@ describe("parseTimeProfiler", () => {
     expect(result.summary).toContain("Main thread");
   });
 
+  it("excludes unsymbolicated frames from hotspots", () => {
+    const tableXml = wrapRows(`
+      <row>
+        <weight fmt="5.00 ms">5000000</weight>
+        <backtrace>
+          <frame name="unknown" addr="0x0000">
+            <binary name="unknown" />
+          </frame>
+        </backtrace>
+      </row>
+      <row>
+        <weight fmt="5.00 ms">5000000</weight>
+        <backtrace>
+          <frame name="0x10303e5c8" addr="0x10303e5c8">
+            <binary name="unknown" />
+          </frame>
+        </backtrace>
+      </row>
+      <row>
+        <weight fmt="3.00 ms">3000000</weight>
+        <backtrace>
+          <frame name="&lt;deduplicated_symbol&gt;" addr="0x1111">
+            <binary name="unknown" />
+          </frame>
+        </backtrace>
+      </row>
+      <row>
+        <weight fmt="2.00 ms">2000000</weight>
+        <backtrace>
+          <frame name="MyApp.realFunction" addr="0x5678">
+            <binary name="MyApp" />
+          </frame>
+        </backtrace>
+      </row>
+    `);
+
+    const result = parseTimeProfiler(EMPTY_TOC, tableXml);
+
+    // Only the real function should appear in hotspots
+    expect(result.hotspots.length).toBe(1);
+    expect(result.hotspots[0].function).toBe("MyApp.realFunction");
+
+    // Unsymbolicated percentage reported in summary
+    expect(result.needsSymbolication).toBe(true);
+    expect(result.summary).toContain("unsymbolicated");
+  });
+
+  it("caps totalPercent at 100%", () => {
+    // Create a scenario where a caller function appears in every backtrace
+    // so its totalWeight far exceeds the self-weight denominator
+    const tableXml = wrapRows(`
+      <row>
+        <weight fmt="5.00 ms">5000000</weight>
+        <backtrace>
+          <frame name="FuncA" addr="0x1"><binary name="MyApp" /></frame>
+          <frame name="CommonCaller" addr="0x2"><binary name="MyApp" /></frame>
+        </backtrace>
+      </row>
+      <row>
+        <weight fmt="5.00 ms">5000000</weight>
+        <backtrace>
+          <frame name="FuncB" addr="0x3"><binary name="MyApp" /></frame>
+          <frame name="CommonCaller" addr="0x2"><binary name="MyApp" /></frame>
+        </backtrace>
+      </row>
+    `);
+
+    const result = parseTimeProfiler(EMPTY_TOC, tableXml);
+
+    for (const hotspot of result.hotspots) {
+      expect(hotspot.totalPercent).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("does not report main-thread blockers from aggregated data", () => {
+    // Even with a dominant hotspot, aggregated data has no thread attribution
+    const tableXml = wrapRows(`
+      <row>
+        <weight fmt="50.00 ms">50000000</weight>
+        <backtrace>
+          <frame name="MyApp.heavyWork" addr="0x1234">
+            <binary name="MyApp" />
+          </frame>
+        </backtrace>
+      </row>
+    `);
+
+    const result = parseTimeProfiler(EMPTY_TOC, tableXml);
+
+    expect(result.mainThreadBlockers).toEqual([]);
+    // Severity still reflects the hotspot concentration
+    expect(result.severity).toBe("critical");
+  });
+
   it("returns empty result when no rows", () => {
     const result = parseTimeProfiler(EMPTY_TOC, EMPTY_TABLE);
 

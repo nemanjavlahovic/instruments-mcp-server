@@ -117,11 +117,26 @@ function parseAggregatedProfile(rows: Row[]): TimeProfileResult {
     }
   }
 
+  // Separate unsymbolicated frames — they aggregate meaninglessly under
+  // "unknown", "<deduplicated_symbol>", or raw hex addresses
+  let unsymbolicatedSelfWeight = 0;
+  const toRemove: string[] = [];
+  for (const [fn, data] of functionWeights) {
+    if (isUnsymbolicated(fn)) {
+      unsymbolicatedSelfWeight += data.self;
+      toRemove.push(fn);
+    }
+  }
+  for (const fn of toRemove) {
+    functionWeights.delete(fn);
+  }
+
+  const symbolicatedSelfWeight = [...functionWeights.values()].reduce((sum, v) => sum + v.self, 0);
+  const totalWeight = symbolicatedSelfWeight + unsymbolicatedSelfWeight;
+
   const sorted = [...functionWeights.entries()]
     .sort((a, b) => b[1].self - a[1].self)
     .slice(0, 20);
-
-  const totalWeight = [...functionWeights.values()].reduce((sum, v) => sum + v.self, 0);
 
   const hotspots: CpuHotspot[] = sorted.map(([fn, data]) => ({
     function: fn,
@@ -131,32 +146,31 @@ function parseAggregatedProfile(rows: Row[]): TimeProfileResult {
     selfWeight: data.self,
     totalWeight: data.total,
     selfPercent: totalWeight > 0 ? Math.round((data.self / totalWeight) * 1000) / 10 : 0,
-    totalPercent: totalWeight > 0 ? Math.round((data.total / totalWeight) * 1000) / 10 : 0,
+    // Cap at 100% — inclusive time can appear to exceed total in multi-threaded traces
+    // but showing >100% is confusing and not actionable
+    totalPercent: totalWeight > 0 ? Math.min(100, Math.round((data.total / totalWeight) * 1000) / 10) : 0,
   }));
 
-  const mainThreadBlockers = hotspots
-    .filter((h) => h.selfPercent > 5 && !isSystemFrame(h.function))
-    .map((h) => ({
-      function: h.function,
-      durationMs: Math.round(h.selfWeight),
-      severity: (h.selfPercent > 15 ? "critical" : h.selfPercent > 8 ? "warning" : "info") as "info" | "warning" | "critical",
-    }));
-
+  // Aggregated time-profile has no thread attribution — we can't determine which
+  // samples ran on the main thread, so don't guess at main-thread blockers.
+  // Severity is based on hotspot concentration instead.
+  const topSelfPercent = hotspots.length > 0 ? hotspots[0].selfPercent : 0;
   const severity: "ok" | "warning" | "critical" =
-    mainThreadBlockers.some((b) => b.severity === "critical")
-      ? "critical"
-      : mainThreadBlockers.some((b) => b.severity === "warning")
-        ? "warning"
-        : "ok";
+    topSelfPercent > 15 ? "critical" : topSelfPercent > 8 ? "warning" : "ok";
+
+  const unsymbolicatedPct = totalWeight > 0
+    ? Math.round((unsymbolicatedSelfWeight / totalWeight) * 1000) / 10
+    : 0;
 
   return {
     template: "Time Profiler",
     totalSamples,
     duration: "unknown",
     hotspots,
-    mainThreadBlockers,
+    mainThreadBlockers: [],
     severity,
-    summary: buildSummary(hotspots, mainThreadBlockers),
+    summary: buildSummary(hotspots, unsymbolicatedPct),
+    needsSymbolication: unsymbolicatedPct > 50,
   };
 }
 
@@ -213,7 +227,10 @@ function parseTimeSamples(rows: Row[]): TimeProfileResult {
 
   const busyThreads = threads.filter((t) => t.utilizationPercent > 50 && !t.name.toLowerCase().includes("main thread"));
   if (busyThreads.length > 0) {
-    parts.push(`Active background threads: ${busyThreads.map((t) => `${t.name.split(" ")[0]}(${t.utilizationPercent}%)`).join(", ")}`);
+    const shown = busyThreads.slice(0, 5);
+    const threadList = shown.map((t) => `${t.name.split(" ")[0]}(${t.utilizationPercent}%)`).join(", ");
+    const extra = busyThreads.length > 5 ? ` and ${busyThreads.length - 5} more` : "";
+    parts.push(`Active background threads: ${threadList}${extra}`);
   }
 
   parts.push("Note: Raw sample data — use symbolicate_trace with dSYMs for function-level detail");
@@ -301,6 +318,10 @@ function extractWeightMs(row: Row): number | null {
   return null;
 }
 
+function isUnsymbolicated(fn: string): boolean {
+  return fn === "unknown" || fn === "<deduplicated_symbol>" || /^0x[0-9a-f]+$/i.test(fn);
+}
+
 function isSystemFrame(fn: string): boolean {
   const systemPrefixes = [
     "objc_msgSend", "swift_", "_dispatch_", "pthread_",
@@ -310,7 +331,7 @@ function isSystemFrame(fn: string): boolean {
   return systemPrefixes.some((p) => fn.startsWith(p));
 }
 
-function buildSummary(hotspots: CpuHotspot[], blockers: TimeProfileResult["mainThreadBlockers"]): string {
+function buildSummary(hotspots: CpuHotspot[], unsymbolicatedPct: number): string {
   const parts: string[] = [];
 
   if (hotspots.length > 0) {
@@ -323,9 +344,8 @@ function buildSummary(hotspots: CpuHotspot[], blockers: TimeProfileResult["mainT
     parts.push(`${userHotspots.length} user-code hotspots identified`);
   }
 
-  const criticalBlockers = blockers.filter((b) => b.severity === "critical");
-  if (criticalBlockers.length > 0) {
-    parts.push(`${criticalBlockers.length} critical main-thread blockers found`);
+  if (unsymbolicatedPct > 0) {
+    parts.push(`${unsymbolicatedPct}% of samples unsymbolicated — use symbolicate_trace with dSYMs for full detail`);
   }
 
   return parts.join(". ") + ".";

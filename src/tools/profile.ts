@@ -57,11 +57,16 @@ Pass trace_path to re-analyze an existing trace without re-recording.`,
         }
 
         let result = parseTimeProfiler(tocXml, tableXml || tocXml);
-        if (result.totalSamples === 0) {
+        // Deferred mode (xctrace 26+) often leaves time-profile nearly empty;
+        // fall back to time-sample if we got suspiciously few samples
+        if (result.totalSamples < 10) {
           const sampleXpath = findTableXpath(tocXml, "time-sample");
           if (sampleXpath) {
             const sampleXml = await xctraceExport({ inputPath: tracePath, xpath: sampleXpath });
-            result = parseTimeProfiler(tocXml, sampleXml);
+            const sampleResult = parseTimeProfiler(tocXml, sampleXml);
+            if (sampleResult.totalSamples > result.totalSamples) {
+              result = sampleResult;
+            }
           }
         }
 

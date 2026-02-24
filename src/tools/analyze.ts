@@ -132,11 +132,15 @@ Total recording time = 5x duration.`,
           : tocXml;
 
         let cpuResult = parseTimeProfiler(tocXml, tableXml);
-        if (cpuResult.totalSamples === 0) {
+        // Deferred mode (xctrace 26+) often leaves time-profile nearly empty
+        if (cpuResult.totalSamples < 10) {
           const sampleXpath = findSchema(tocXml, "time-sample");
           if (sampleXpath) {
             const sampleXml = await xctraceExport({ inputPath: cpuTrace, xpath: sampleXpath });
-            cpuResult = parseTimeProfiler(tocXml, sampleXml);
+            const sampleResult = parseTimeProfiler(tocXml, sampleXml);
+            if (sampleResult.totalSamples > cpuResult.totalSamples) {
+              cpuResult = sampleResult;
+            }
           }
         }
         results.cpu = cpuResult;
