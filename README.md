@@ -5,6 +5,7 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/instrumentsmcp"><img src="https://img.shields.io/npm/v/instrumentsmcp" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node.js"></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-purple" alt="MCP"></a>
@@ -213,24 +214,20 @@ When traces lack debug symbols, falls back to thread-level analysis:
 - macOS with Xcode installed (`xctrace` CLI)
 - Node.js >= 20
 
-### Install
-
-```bash
-git clone https://github.com/nicklama/InstrumentsMCP.git
-cd InstrumentsMCP
-npm install && npm run build
-```
-
 ### Claude Code
 
-Add to `.mcp.json`:
+```bash
+npx instrumentsmcp@latest
+```
+
+Or add to your project's `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "instruments": {
-      "command": "node",
-      "args": ["/path/to/InstrumentsMCP/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "instrumentsmcp@latest"]
     }
   }
 }
@@ -238,7 +235,17 @@ Add to `.mcp.json`:
 
 ### Cursor / Windsurf / Other MCP Clients
 
-Same configuration — point to `dist/index.js` using your client's MCP server settings.
+Use the same `npx` command in your client's MCP server settings.
+
+### Install from Source
+
+```bash
+git clone https://github.com/nemanjavlahovic/instruments-mcp-server.git
+cd instruments-mcp-server
+npm install && npm run build
+```
+
+Then point your MCP client to `dist/index.js`.
 
 ## Architecture
 
