@@ -1,33 +1,185 @@
-# instruments-mcp-server
+# InstrumentsMCP
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
-[![MCP](https://img.shields.io/badge/MCP-compatible-purple)](https://modelcontextprotocol.io)
+<p align="center">
+  <img src="instruments-cover.png" alt="InstrumentsMCP" width="720" />
+</p>
 
-MCP server that wraps Xcode Instruments (`xctrace`) to give AI agents readable performance profiling for iOS/macOS apps.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node.js"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-purple" alt="MCP"></a>
+</p>
 
-Instead of raw XML trace dumps, agents get structured JSON with severity classifications and actionable summaries.
+**AI-native performance profiling for iOS and macOS apps.**
 
-## Why
+InstrumentsMCP gives AI agents the ability to profile your app using Xcode Instruments, understand the results, and suggest fixes — all without you opening Instruments once.
 
-Instruments produces massive XML exports that are impractical for AI agents to consume. This server:
+> "Profile my app for CPU hotspots" → structured JSON with severity ratings → AI suggests the fix
 
-- **Records** traces using any Instruments template (Time Profiler, SwiftUI, Allocations, Animation Hitches, etc.)
-- **Parses** template-specific data with tuned heuristics per metric type
-- **Classifies** findings by severity (ok / warning / critical) with domain-specific thresholds
-- **Summarizes** results into concise, actionable text an agent can reason about
+## The Problem
 
-## Tools
+Xcode Instruments is powerful but produces massive, opaque XML trace exports that AI agents can't reason about. Developers end up manually profiling, interpreting flame graphs, and translating findings into code changes.
+
+## The Solution
+
+InstrumentsMCP wraps `xctrace` as an MCP server that **records, parses, classifies, and summarizes** Instruments traces into structured data any AI agent can act on.
+
+- **Records** traces using any Instruments template
+- **Parses** with template-specific heuristics (not generic XML dumping)
+- **Classifies** by severity with domain-tuned thresholds
+- **Summarizes** into actionable text an agent can reason about
+
+## What You Can Profile
+
+| Tool | What It Finds | Severity Thresholds |
+|---|---|---|
+| `profile_cpu` | CPU hotspots, main thread blockers, per-thread utilization | >15% self-time critical, >8% warning |
+| `profile_swiftui` | Excessive view body re-evaluations, slow view rendering | >100 evals or >50ms critical |
+| `profile_memory` | Memory by category, persistent vs transient, largest allocators | >50MB or >100k allocs critical |
+| `profile_hitches` | Animation hangs with backtraces and duration classification | >1s critical, >250ms warning |
+| `profile_launch` | App launch time, phase breakdown, cold/warm/resume detection | >1s cold critical, >500ms warm critical |
+| `performance_audit` | Combined CPU + hitch check in one call | All of the above |
+| `profile_raw` | Any template — raw table of contents for custom analysis | — |
+
+## Quick Example
+
+Ask your AI agent:
+
+> "Profile my app for 5 seconds and tell me what's slow"
+
+InstrumentsMCP returns:
+
+```json
+{
+  "hotspots": [
+    {
+      "function": "FeedViewModel.loadItems()",
+      "module": "MyApp",
+      "selfPercent": 18.3,
+      "totalPercent": 24.1,
+      "severity": "critical"
+    }
+  ],
+  "mainThreadBlockers": [
+    {
+      "function": "JSONDecoder.decode()",
+      "durationMs": 34,
+      "severity": "warning"
+    }
+  ],
+  "summary": "Hottest function: FeedViewModel.loadItems() (18.3% CPU). 1 critical main-thread blocker found."
+}
+```
+
+The agent reads this, understands the problem, and suggests moving `loadItems()` off the main thread.
+
+## More Examples
+
+<details>
+<summary><b>SwiftUI View Performance</b></summary>
+
+```json
+{
+  "template": "SwiftUI",
+  "totalBodyEvaluations": 847,
+  "excessiveEvaluations": [
+    {
+      "viewName": "FeedCardView",
+      "evaluationCount": 156,
+      "averageDurationUs": 420,
+      "severity": "critical"
+    }
+  ],
+  "summary": "847 total body evaluations across 23 views. 1 view with excessive re-evaluations: FeedCardView."
+}
+```
+
+</details>
+
+<details>
+<summary><b>App Launch</b></summary>
+
+```json
+{
+  "template": "App Launch",
+  "totalLaunchMs": 1340,
+  "launchType": "cold",
+  "severity": "critical",
+  "phases": [
+    {
+      "name": "Dynamic Library Loading",
+      "durationMs": 580,
+      "severity": "critical"
+    },
+    {
+      "name": "UIKit Initialization",
+      "durationMs": 310,
+      "severity": "critical"
+    },
+    {
+      "name": "Initial Frame Rendering",
+      "durationMs": 290,
+      "severity": "warning"
+    }
+  ],
+  "summary": "App launch (cold): 1340ms — CRITICAL. Exceeds Apple's recommended launch time. Target: <400ms cold, <200ms warm. Slowest phases: Dynamic Library Loading (580ms), UIKit Initialization (310ms)."
+}
+```
+
+</details>
+
+<details>
+<summary><b>Animation Hitches</b></summary>
+
+```json
+{
+  "template": "Animation Hitches",
+  "totalHangs": 3,
+  "criticalHangs": 1,
+  "warningHangs": 2,
+  "summary": "3 hang events detected. 1 CRITICAL hang (>1s). 2 warning hangs (250ms-1s). Worst hang: 1240ms."
+}
+```
+
+</details>
+
+<details>
+<summary><b>CPU Profiling (unsymbolicated)</b></summary>
+
+When traces lack debug symbols, falls back to thread-level analysis:
+
+```json
+{
+  "template": "Time Profiler",
+  "totalSamples": 34,
+  "threads": [
+    {
+      "name": "Main Thread 0x1ed4d4 (MyApp, pid: 98601)",
+      "sampleCount": 12,
+      "runningCount": 3,
+      "blockedCount": 9,
+      "utilizationPercent": 25
+    }
+  ],
+  "summary": "34 CPU samples across 8 threads. Main thread: 25% active (3 running, 9 blocked).",
+  "needsSymbolication": true
+}
+```
+
+</details>
+
+## All Tools
 
 ### Profiling
 
-| Tool | Template | Output |
+| Tool | Template | What it returns |
 |---|---|---|
 | `profile_cpu` | Time Profiler | Top CPU hotspots, main thread blockers, per-thread utilization |
 | `profile_swiftui` | SwiftUI | View body evaluation counts, excessive re-renders, duration per view |
 | `profile_memory` | Allocations | Memory usage by category, persistent vs transient, largest allocators |
-| `profile_hitches` | Animation Hitches | Hang events by severity (micro/minor/warning/critical) with backtraces |
-| `profile_raw` | Any | Raw TOC for templates without a dedicated parser |
+| `profile_hitches` | Animation Hitches | Hang events by severity with backtraces |
+| `profile_launch` | App Launch | Launch time, phases, cold/warm/resume classification |
+| `profile_raw` | Any | Raw table of contents for templates without a dedicated parser |
 | `performance_audit` | Time Profiler + Hitches | Combined health check in one call |
 
 ### Analysis
@@ -46,135 +198,39 @@ Instruments produces massive XML exports that are impractical for AI agents to c
 | `instruments_list_devices` | List connected devices and running simulators |
 | `instruments_list_instruments` | List individual instruments |
 
-## Requirements
+## Setup
+
+### Requirements
 
 - macOS with Xcode installed (`xctrace` CLI)
 - Node.js >= 20
 
-## Quick Start
+### Install
 
 ```bash
-git clone https://github.com/nemanjavlahovic/instruments-mcp-server.git
-cd instruments-mcp-server
-npm install
-npm run build
+git clone https://github.com/nicklama/InstrumentsMCP.git
+cd InstrumentsMCP
+npm install && npm run build
 ```
 
 ### Claude Code
 
-Add to your project's `.mcp.json`:
+Add to `.mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "instruments": {
       "command": "node",
-      "args": ["/path/to/instruments-mcp-server/dist/index.js"]
+      "args": ["/path/to/InstrumentsMCP/dist/index.js"]
     }
   }
 }
 ```
 
-### Development
+### Cursor / Windsurf / Other MCP Clients
 
-```json
-{
-  "mcpServers": {
-    "instruments": {
-      "command": "npx",
-      "args": ["tsx", "/path/to/instruments-mcp-server/src/index.ts"]
-    }
-  }
-}
-```
-
-## Example Output
-
-### CPU Profiling (aggregated)
-
-When function names are available (symbolicated traces):
-
-```json
-{
-  "template": "Time Profiler",
-  "totalSamples": 4521,
-  "duration": "unknown",
-  "hotspots": [
-    {
-      "function": "FeedViewModel.loadItems()",
-      "module": "MyApp",
-      "file": "FeedViewModel.swift",
-      "selfWeight": 823,
-      "totalWeight": 1089,
-      "selfPercent": 18.3,
-      "totalPercent": 24.1
-    }
-  ],
-  "mainThreadBlockers": [
-    {
-      "function": "JSONDecoder.decode()",
-      "durationMs": 34,
-      "severity": "warning"
-    }
-  ],
-  "summary": "Hottest function: FeedViewModel.loadItems() (18.3% CPU). 5 user-code hotspots identified. 1 critical main-thread blockers found."
-}
-```
-
-### CPU Profiling (raw samples, no dSYMs)
-
-When traces lack debug symbols, falls back to thread-level analysis:
-
-```json
-{
-  "template": "Time Profiler",
-  "totalSamples": 34,
-  "duration": "unknown",
-  "hotspots": [],
-  "threads": [
-    {
-      "name": "Main Thread 0x1ed4d4 (MyApp, pid: 98601)",
-      "sampleCount": 12,
-      "runningCount": 3,
-      "blockedCount": 9,
-      "utilizationPercent": 25
-    }
-  ],
-  "mainThreadBlockers": [],
-  "summary": "34 CPU samples across 8 threads. Main thread: 25% active (3 running, 9 blocked).",
-  "needsSymbolication": true
-}
-```
-
-### SwiftUI View Performance
-
-```json
-{
-  "template": "SwiftUI",
-  "totalBodyEvaluations": 847,
-  "excessiveEvaluations": [
-    {
-      "viewName": "FeedCardView",
-      "evaluationCount": 156,
-      "averageDurationUs": 420,
-      "severity": "critical"
-    }
-  ],
-  "summary": "847 total body evaluations across 23 views. 1 views with excessive re-evaluations: FeedCardView."
-}
-```
-
-### Animation Hitches
-
-```json
-{
-  "template": "Animation Hitches",
-  "totalHangs": 3,
-  "criticalHangs": 1,
-  "warningHangs": 2,
-  "summary": "3 hang events detected. 1 CRITICAL hangs (>1s). 2 warning hangs (250ms-1s). Worst hang: 1240ms."
-}
-```
+Same configuration — point to `dist/index.js` using your client's MCP server settings.
 
 ## Architecture
 
@@ -195,11 +251,11 @@ src/
     └── xml.ts            # XML parsing (fast-xml-parser)
 ```
 
-Each Instruments template has a dedicated parser with domain-specific heuristics. Severity thresholds are tuned per metric type (CPU %, memory MB, hang duration ms). Traces are stored in `~/.instruments-mcp/traces/` for reuse.
+Each Instruments template has a dedicated parser with domain-specific heuristics. Severity thresholds are tuned per metric type. Traces are stored in `~/.instruments-mcp/traces/` for reuse and comparison.
 
 ## Compatibility
 
-- Tested with Xcode Instruments (xctrace) 15.x through 26.x
+- Xcode Instruments (xctrace) 15.x through 26.x
 - Handles xctrace 26 Deferred recording mode (automatic `time-sample` fallback)
 - Retry logic for intermittent xctrace export failures
 

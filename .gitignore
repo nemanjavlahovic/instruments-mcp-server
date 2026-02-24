@@ -5,3 +5,4 @@ dist/
 traces/
 .env
 .DS_Store
+.claude/

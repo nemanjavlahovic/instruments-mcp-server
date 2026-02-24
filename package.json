@@ -1,11 +1,11 @@
 {
-  "name": "instruments-mcp-server",
+  "name": "instrumentsmcp",
   "version": "0.1.0",
-  "description": "MCP server that wraps Apple Instruments (xctrace) to provide AI-readable performance profiling for iOS/macOS apps",
+  "description": "AI-native performance profiling for iOS and macOS apps. Wraps Xcode Instruments (xctrace) as an MCP server with structured analysis, severity classification, and actionable summaries.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "instruments-mcp-server": "dist/index.js"
+    "instrumentsmcp": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",

@@ -7,7 +7,7 @@ import { registerListTools } from "./tools/list.js";
 import { registerAnalyzeTools } from "./tools/analyze.js";
 
 const server = new McpServer({
-  name: "instruments-mcp-server",
+  name: "InstrumentsMCP",
   version: "0.1.0",
 });
 

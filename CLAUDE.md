@@ -1,12 +1,12 @@
-# instruments-mcp-server
+# InstrumentsMCP
 
 ## What This Is
-An MCP server that wraps Xcode Instruments (`xctrace` CLI) to provide AI-readable performance profiling for iOS/macOS apps. Instead of dumping raw XML, it parses trace data into structured JSON with severity classifications and actionable summaries.
+AI-native performance profiling for iOS and macOS apps. Wraps Xcode Instruments (`xctrace` CLI) as an MCP server, parsing trace data into structured JSON with severity classifications and actionable summaries.
 
 ## Architecture
 - **src/index.ts** - MCP server entry point, registers all tools
 - **src/tools/** - Tool definitions (profile, list, analyze)
-- **src/parsers/** - Template-specific XML→JSON parsers (time-profiler, swiftui, allocations, hangs)
+- **src/parsers/** - Template-specific XML→JSON parsers (time-profiler, swiftui, allocations, hangs, app-launch)
 - **src/utils/xctrace.ts** - Low-level xctrace CLI wrapper
 - **src/utils/xml.ts** - XML parsing with fast-xml-parser
 
