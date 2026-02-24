@@ -37,7 +37,7 @@ export function registerProfileTools(server: McpServer): void {
   server.tool(
     "profile_cpu",
     `Record and analyze CPU performance using Time Profiler.
-Returns: Top CPU hotspots, main thread blockers, and actionable summary.
+Returns: Top CPU hotspots with severity classification and actionable summary.
 Pass trace_path to re-analyze an existing trace without re-recording.`,
     {
       process: z.string().optional().describe("Process name or PID to attach to"),

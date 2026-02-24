@@ -8,6 +8,7 @@
 
 import { spawnXctraceRecord, xctraceExport } from "./utils/xctrace.js";
 import { findTableXpath, findTrackXpath } from "./utils/trace-helpers.js";
+import { resolveDevice } from "./utils/simctl.js";
 
 interface CliOptions {
   process?: string;
@@ -16,7 +17,9 @@ interface CliOptions {
   device?: string;
 }
 
-function parseArgs(args: string[]): CliOptions | null {
+export type ParseResult = { kind: "ok"; opts: CliOptions } | { kind: "help" } | { kind: "error"; message: string };
+
+export function parseArgs(args: string[]): ParseResult {
   const opts: CliOptions = { template: "Time Profiler" };
 
   for (let i = 0; i < args.length; i++) {
@@ -46,21 +49,19 @@ function parseArgs(args: string[]): CliOptions | null {
         break;
       case "--help":
       case "-h":
-        return null;
+        return { kind: "help" };
       default:
         if (arg.startsWith("-")) {
-          console.error(`Unknown option: ${arg}`);
-          return null;
+          return { kind: "error", message: `Unknown option: ${arg}` };
         }
     }
   }
 
   if (!opts.process && !opts.launchPath) {
-    console.error("Error: --process <name|PID> or --launch <path> is required.\n");
-    return null;
+    return { kind: "error", message: "Error: --process <name|PID> or --launch <path> is required." };
   }
 
-  return opts;
+  return { kind: "ok", opts };
 }
 
 function printUsage(): void {
@@ -85,10 +86,27 @@ Examples:
 }
 
 export async function runInteractiveRecord(args: string[]): Promise<void> {
-  const opts = parseArgs(args);
-  if (!opts) {
+  const result = parseArgs(args);
+  if (result.kind === "help") {
+    printUsage();
+    process.exit(0);
+  }
+  if (result.kind === "error") {
+    console.error(result.message + "\n");
     printUsage();
     process.exit(1);
+  }
+
+  const opts = result.opts;
+
+  // Resolve device identifier to UDID for xctrace
+  if (opts.device) {
+    try {
+      const sim = await resolveDevice(opts.device);
+      opts.device = sim.udid;
+    } catch {
+      // If resolution fails (e.g., physical device), pass through as-is
+    }
   }
 
   const target = opts.process || opts.launchPath || "unknown";

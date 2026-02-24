@@ -138,8 +138,14 @@ export function spawnXctraceRecord(options: RecordOptions): ActiveRecording {
   child.stderr?.on("data", (data: Buffer) => { stderr += data.toString(); });
 
   const completion = new Promise<{ tracePath: string; stdout: string; stderr: string }>((resolve, reject) => {
-    child.on("close", () => {
-      resolve({ tracePath: outputPath, stdout, stderr });
+    child.on("close", (code, signal) => {
+      // SIGINT (manual stop) and time-limit exits (code 0) are expected
+      if (code === 0 || code === null || signal === "SIGINT") {
+        resolve({ tracePath: outputPath, stdout, stderr });
+      } else {
+        const context = stderr || stdout || `exit code ${code}`;
+        reject(new Error(`xctrace recording failed (exit ${code}): ${context}`));
+      }
     });
     child.on("error", (err) => {
       reject(err);

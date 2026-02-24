@@ -219,15 +219,15 @@ export async function simctlSetLocation(device: string, latitude: number, longit
 // ── Device resolution ──────────────────────────────────────────────
 
 /**
- * Resolve a device identifier to a booted SimDevice.
- * - undefined or "booted" → first booted simulator
- * - UDID string → matched from booted list
- * - Device name → matched from booted list
- * Throws if no matching booted simulator found.
+ * Match a device identifier against a list of booted simulators.
+ * Pure function — no I/O. Exported for testing.
+ *
+ * - undefined or "booted" → first device in list
+ * - UDID string → exact match
+ * - Device name → case-insensitive exact or partial match
+ * Throws if no match found.
  */
-export async function resolveDevice(device?: string): Promise<SimDevice> {
-  const booted = await simctlListBooted();
-
+export function matchDevice(booted: SimDevice[], device?: string): SimDevice {
   if (booted.length === 0) {
     throw new Error("No booted simulators found. Boot a simulator first with: xcrun simctl boot <device-udid>");
   }
@@ -251,4 +251,13 @@ export async function resolveDevice(device?: string): Promise<SimDevice> {
   throw new Error(
     `No booted simulator matching "${device}". Booted simulators: ${booted.map((d) => `${d.name} (${d.udid})`).join(", ")}`
   );
+}
+
+/**
+ * Resolve a device identifier to a booted SimDevice.
+ * Fetches booted simulators, then matches by UDID, name, or partial name.
+ */
+export async function resolveDevice(device?: string): Promise<SimDevice> {
+  const booted = await simctlListBooted();
+  return matchDevice(booted, device);
 }

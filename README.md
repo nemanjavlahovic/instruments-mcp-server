@@ -108,13 +108,13 @@ Agent: calls profile_leaks({ process: "MyApp", duration: "30s" })
 
 | Tool | What It Finds | Severity Thresholds |
 |---|---|---|
-| `profile_cpu` | CPU hotspots, main thread blockers, per-thread utilization | >15% self-time critical, >8% warning |
+| `profile_cpu` | CPU hotspots, per-thread utilization, severity classification | >15% self-time critical, >8% warning |
 | `profile_swiftui` | Excessive view body re-evaluations, slow view rendering | >100 evals or >50ms critical |
 | `profile_memory` | Memory by category, persistent vs transient, largest allocators | >50MB or >100k allocs critical |
 | `profile_hitches` | Animation hangs with backtraces and duration classification | >1s critical, >250ms warning |
 | `profile_launch` | App launch time, phase breakdown, cold/warm/resume detection | >1s cold critical, >500ms warm critical |
-| `profile_energy` | Energy impact scores (0–20), per-component breakdown, thermal state | Avg ≥12 or peak ≥18 critical |
-| `profile_leaks` | Leaked objects by type, sizes, responsible libraries | >100 leaks or >1MB critical |
+| `profile_energy` | Energy impact scores (0–20), per-component breakdown, thermal state | Avg ≥13 or peak ≥20 critical |
+| `profile_leaks` | Leaked objects by type, sizes, responsible libraries | >100 leaks or >10MB total critical |
 | `profile_network` | HTTP traffic: request counts, durations, error rates, per-domain breakdown | >10% errors or >5s response critical |
 | `performance_audit` | Combined CPU + Hitches + Leaks + Energy + Network health check | Worst severity across all five |
 | `profile_raw` | Any template — raw table of contents for custom analysis | — |
@@ -152,14 +152,8 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
       "severity": "critical"
     }
   ],
-  "mainThreadBlockers": [
-    {
-      "function": "JSONDecoder.decode()",
-      "durationMs": 34,
-      "severity": "warning"
-    }
-  ],
-  "summary": "Hottest function: FeedViewModel.loadItems() (18.3% CPU). 1 critical main-thread blocker found."
+  "severity": "critical",
+  "summary": "Hottest function: FeedViewModel.loadItems() (18.3% CPU). 3 user-code hotspots identified."
 }
 ```
 
@@ -235,7 +229,7 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
 
 | Tool | Template | What It Returns |
 |---|---|---|
-| `profile_cpu` | Time Profiler | Top CPU hotspots, main thread blockers, per-thread utilization |
+| `profile_cpu` | Time Profiler | Top CPU hotspots, per-thread utilization, severity classification |
 | `profile_swiftui` | SwiftUI | View body evaluation counts, excessive re-renders, duration per view |
 | `profile_memory` | Allocations | Memory usage by category, persistent vs transient, largest allocators |
 | `profile_hitches` | Animation Hitches | Hang events by severity with backtraces |
@@ -333,7 +327,8 @@ Press Ctrl+C to stop. Results print to stdout, trace is saved for later re-analy
 
 ```
 src/
-├── index.ts              # MCP server entry point
+├── index.ts              # MCP server entry point + CLI router
+├── cli.ts                # Interactive CLI mode (instrumentsmcp record)
 ├── tools/
 │   ├── profile.ts        # One-shot profiling tools (cpu, swiftui, memory, etc.)
 │   ├── simulator.ts      # Simulator control + start/stop + scenario profiling
@@ -345,7 +340,7 @@ src/
 │   ├── app-launch.ts, energy.ts, leaks.ts, network.ts
 └── utils/
     ├── xctrace.ts        # xctrace CLI wrapper (record, export, spawn, symbolicate)
-    ├── simctl.ts         # simctl CLI wrapper (simulator interaction)
+    ├── simctl.ts         # simctl CLI wrapper (simulator interaction + device resolution)
     ├── trace-helpers.ts  # Shared xpath resolution and timing helpers
     ├── extractors.ts     # Shared XML row/field extractors
     └── xml.ts            # XML parsing (fast-xml-parser)
@@ -358,6 +353,7 @@ Each Instruments template has a dedicated parser with domain-specific heuristics
 - Xcode Instruments (xctrace) 15.x through 26.x
 - Handles xctrace 26 Deferred recording mode (automatic `time-sample` fallback)
 - Retry logic for intermittent xctrace export failures
+- Device identifiers (`booted`, device name, UDID) are automatically resolved to simulator UDIDs
 - Simulator interaction requires a booted iOS Simulator
 
 ## License

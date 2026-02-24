@@ -360,19 +360,40 @@ Max recording time is 5 minutes (safety limit). Recording stops automatically if
           };
         }
 
+        // Resolve device identifier to UDID for xctrace
+        let resolvedDevice = device;
+        if (device) {
+          try {
+            const sim = await resolveDevice(device);
+            resolvedDevice = sim.udid;
+          } catch {
+            // If resolution fails (e.g., profiling a physical device or Mac),
+            // pass the original value through to xctrace
+          }
+        }
+
         const recording = spawnXctraceRecord({
           template,
           attachProcess: process,
           launchPath: launch_path,
-          device,
+          device: resolvedDevice,
           timeLimit: max_duration,
         });
 
         activeRecording = {
           ...recording,
-          device,
+          device: resolvedDevice,
           attachProcess: process,
         };
+
+        // Auto-clear activeRecording when the recording completes on its own
+        // (e.g., max duration reached or xctrace exits unexpectedly)
+        const recordingRef = recording;
+        recording.completion.finally(() => {
+          if (activeRecording && activeRecording.startTime === recordingRef.startTime) {
+            activeRecording = null;
+          }
+        });
 
         return {
           content: [{
@@ -381,7 +402,7 @@ Max recording time is 5 minutes (safety limit). Recording stops automatically if
               status: "recording",
               template,
               process: process || launch_path || "all processes",
-              device: device || "host Mac",
+              device: resolvedDevice || "host Mac",
               tracePath: recording.tracePath,
               maxDuration: max_duration,
               hint: "Recording started. The user should interact with the app now. Call stop_profiling when done.",
