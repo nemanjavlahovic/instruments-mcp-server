@@ -5,6 +5,7 @@ import { parseTimeProfiler } from "../parsers/time-profiler.js";
 import { parseSwiftUI } from "../parsers/swiftui.js";
 import { parseAllocations } from "../parsers/allocations.js";
 import { parseHangs } from "../parsers/hangs.js";
+import { parseAppLaunch } from "../parsers/app-launch.js";
 
 export function registerProfileTools(server: McpServer): void {
   // ── CPU Profiling ──────────────────────────────────────────────
@@ -208,6 +209,64 @@ Best used during scrolling or animations.`,
       } catch (e) {
         return {
           content: [{ type: "text" as const, text: `Hitch profiling failed: ${e}` }],
+          isError: true,
+        };
+      }
+    }
+  );
+
+  // ── App Launch Profiling ──────────────────────────────────────
+  server.tool(
+    "profile_launch",
+    `Record and analyze app launch performance.
+Returns: Total launch time, launch type (cold/warm/resume), phase breakdown, severity against Apple's guidelines.
+IMPORTANT: Use launch_path to launch the app — attaching to a running process won't capture the launch.`,
+    {
+      launch_path: z
+        .string()
+        .describe("Path to .app bundle to launch and profile (required for launch profiling)"),
+      device: z
+        .string()
+        .optional()
+        .describe("Device name or UDID (omit for host Mac)"),
+      duration: z
+        .string()
+        .default("30s")
+        .describe("Recording duration — should be long enough for the app to finish launching (default 30s)"),
+    },
+    async ({ launch_path, device, duration }) => {
+      try {
+        const { tracePath } = await xctraceRecord({
+          template: "App Launch",
+          launchPath: launch_path,
+          device,
+          timeLimit: duration,
+        });
+
+        const tocXml = await xctraceExport({ inputPath: tracePath, toc: true });
+
+        // App Launch data may be in various tables: lifecycle, os-signpost, app-launch
+        const tableXpath =
+          findTableXpath(tocXml, "app-launch") ||
+          findTableXpath(tocXml, "lifecycle") ||
+          findTableXpath(tocXml, "os-signpost") ||
+          findTableXpath(tocXml, "signpost");
+        const tableXml = tableXpath
+          ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath })
+          : tocXml;
+
+        const result = parseAppLaunch(tocXml, tableXml);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ ...result, tracePath }, null, 2),
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `App launch profiling failed: ${e}` }],
           isError: true,
         };
       }
