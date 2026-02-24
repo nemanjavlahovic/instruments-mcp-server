@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { xctraceExport, xctraceSymbolicate, xctraceRecord } from "../utils/xctrace.js";
+import { findTableXpath as findSchema, findTrackXpath } from "../utils/trace-helpers.js";
 import { parseXml } from "../utils/xml.js";
 
 export function registerAnalyzeTools(server: McpServer): void {
@@ -264,30 +265,6 @@ Total recording time = 5x duration.`,
   );
 }
 
-function findSchema(tocXml: string, keyword: string): string | null {
-  const match = tocXml.match(new RegExp(`schema="([^"]*${keyword}[^"]*)"`, "i"));
-  if (!match) return null;
-  const schema = match[1];
-  const runMatch = tocXml.match(/<run\s+number="(\d+)"/);
-  const runNumber = runMatch ? runMatch[1] : "1";
-  return `/trace-toc/run[@number="${runNumber}"]/data/table[@schema="${schema}"]`;
-}
-
-/**
- * Search the TOC XML for a track detail matching a schema keyword.
- * Leaks and Network data may live under tracks/track/details/detail instead of data/table.
- */
-function findTrackXpath(tocXml: string, schemaKeyword: string): string | null {
-  const detailPattern = new RegExp(`<detail[^>]*schema="([^"]*${schemaKeyword}[^"]*)"`, "i");
-  const match = tocXml.match(detailPattern);
-  if (!match) return null;
-
-  const schema = match[1];
-  const runMatch = tocXml.match(/<run\s+number="(\d+)"/);
-  const runNumber = runMatch ? runMatch[1] : "1";
-
-  return `/trace-toc/run[@number="${runNumber}"]/tracks/track/details/detail[@schema="${schema}"]`;
-}
 
 /**
  * Determine the worst severity across all audit results.

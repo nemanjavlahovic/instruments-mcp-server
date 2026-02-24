@@ -1,6 +1,6 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 const execFileAsync = promisify(execFile);
@@ -88,6 +88,71 @@ export async function xctraceRecord(options: RecordOptions): Promise<{ tracePath
   const { stdout, stderr } = await execFileAsync(XCTRACE_PATH, args, { timeout });
 
   return { tracePath: outputPath, stdout, stderr };
+}
+
+/**
+ * Spawn xctrace record as a long-running process.
+ * Returns immediately with a handle to stop the recording later via SIGINT.
+ * Used by start_profiling/stop_profiling for user-controlled recording sessions.
+ */
+export interface ActiveRecording {
+  childProcess: ChildProcess;
+  tracePath: string;
+  template: string;
+  startTime: number;
+  completion: Promise<{ tracePath: string; stdout: string; stderr: string }>;
+}
+
+export function spawnXctraceRecord(options: RecordOptions): ActiveRecording {
+  mkdirSync(TRACE_OUTPUT_DIR, { recursive: true });
+
+  const outputPath = options.outputPath ?? join(TRACE_OUTPUT_DIR, `profile-${Date.now()}.trace`);
+
+  const args: string[] = [
+    "record",
+    "--template", options.template,
+    "--time-limit", options.timeLimit,
+    "--output", outputPath,
+    "--no-prompt",
+  ];
+
+  if (options.device) {
+    args.push("--device", options.device);
+  }
+
+  if (options.allProcesses) {
+    args.push("--all-processes");
+  } else if (options.attachProcess) {
+    args.push("--attach", options.attachProcess);
+  } else if (options.launchPath) {
+    args.push("--launch", "--", options.launchPath);
+  } else {
+    args.push("--all-processes");
+  }
+
+  const child = spawn(XCTRACE_PATH, args, { stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+
+  child.stdout?.on("data", (data: Buffer) => { stdout += data.toString(); });
+  child.stderr?.on("data", (data: Buffer) => { stderr += data.toString(); });
+
+  const completion = new Promise<{ tracePath: string; stdout: string; stderr: string }>((resolve, reject) => {
+    child.on("close", () => {
+      resolve({ tracePath: outputPath, stdout, stderr });
+    });
+    child.on("error", (err) => {
+      reject(err);
+    });
+  });
+
+  return {
+    childProcess: child,
+    tracePath: outputPath,
+    template: options.template,
+    startTime: Date.now(),
+    completion,
+  };
 }
 
 /**

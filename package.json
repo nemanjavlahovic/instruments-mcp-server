@@ -1,7 +1,7 @@
 {
   "name": "instrumentsmcp",
-  "version": "0.2.1",
-  "description": "AI-native performance profiling for iOS and macOS apps. Wraps Xcode Instruments (xctrace) as an MCP server with structured analysis, severity classification, and actionable summaries.",
+  "version": "0.3.0",
+  "description": "AI-native performance profiling for iOS and macOS apps. Profile while you use the app — start/stop recording, simulator control, scenario automation, all through Xcode Instruments via MCP.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -22,7 +22,9 @@
     "profiling",
     "ios",
     "performance",
-    "xcode"
+    "xcode",
+    "simulator",
+    "simctl"
   ],
   "license": "MIT",
   "dependencies": {

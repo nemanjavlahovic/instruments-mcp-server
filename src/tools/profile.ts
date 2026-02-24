@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { xctraceRecord, xctraceExport, getTraceOutputDir } from "../utils/xctrace.js";
+import { findTableXpath, findTrackXpath } from "../utils/trace-helpers.js";
 import { parseTimeProfiler } from "../parsers/time-profiler.js";
 import { parseSwiftUI } from "../parsers/swiftui.js";
 import { parseAllocations } from "../parsers/allocations.js";
@@ -358,32 +359,3 @@ You can then use analyze_trace to export specific tables.`,
   );
 }
 
-/**
- * Search the TOC XML for a table matching a schema keyword and return its xpath.
- */
-function findTableXpath(tocXml: string, schemaKeyword: string): string | null {
-  const schemaPattern = new RegExp(`schema="([^"]*${schemaKeyword}[^"]*)"`, "i");
-  const match = tocXml.match(schemaPattern);
-  if (!match) return null;
-
-  const schema = match[1];
-  const runMatch = tocXml.match(/<run\s+number="(\d+)"/);
-  const runNumber = runMatch ? runMatch[1] : "1";
-
-  return `/trace-toc/run[@number="${runNumber}"]/data/table[@schema="${schema}"]`;
-}
-
-/**
- * Search the TOC XML for a track detail matching a schema keyword (e.g., Leaks uses tracks).
- */
-function findTrackXpath(tocXml: string, schemaKeyword: string): string | null {
-  const detailPattern = new RegExp(`<detail[^>]*schema="([^"]*${schemaKeyword}[^"]*)"`, "i");
-  const match = tocXml.match(detailPattern);
-  if (!match) return null;
-
-  const schema = match[1];
-  const runMatch = tocXml.match(/<run\s+number="(\d+)"/);
-  const runNumber = runMatch ? runMatch[1] : "1";
-
-  return `/trace-toc/run[@number="${runNumber}"]/tracks/track/details/detail[@schema="${schema}"]`;
-}
