@@ -1,5 +1,10 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, extractFmt, parseFmtDuration, isRow, type Row } from "../utils/extractors.js";
+import {
+  extractRows, extractStr, extractFmt,
+  extractDurationMs as sharedExtractDurationMs,
+  extractTimestampMs as sharedExtractTimestampMs,
+  type Row,
+} from "../utils/extractors.js";
 
 export interface LaunchPhase {
   name: string;
@@ -137,49 +142,20 @@ function normalizePhaseName(name: string): string {
 
 // ── Duration extraction ─────────────────────────────────────────────
 
-function extractDurationMs(row: Row): number {
-  for (const key of ["duration", "elapsed-time", "time", "interval-duration"]) {
-    const val = row[key] ?? row[`@_${key}`];
-    if (val != null) {
-      if (isRow(val)) {
-        const rawValue = val["#text"];
-        if (rawValue != null) {
-          const ns = Number(rawValue);
-          if (!isNaN(ns)) return ns / 1_000_000;
-        }
-        const fmt = val["@_fmt"];
-        if (typeof fmt === "string") return parseFmtDuration(fmt);
-      }
-      const num = Number(val);
-      if (!isNaN(num)) {
-        return num > 1_000_000 ? num / 1_000_000 : num;
-      }
-    }
-  }
+const DURATION_KEYS = ["duration", "elapsed-time", "time", "interval-duration"];
 
-  const start = extractTimestampMs(row, "start-time") ?? extractTimestampMs(row, "start");
-  const end = extractTimestampMs(row, "end-time") ?? extractTimestampMs(row, "end");
+function extractDurationMs(row: Row): number {
+  const ms = sharedExtractDurationMs(row, DURATION_KEYS);
+  if (ms > 0) return ms;
+
+  // Fallback: compute from start/end timestamps
+  const start = sharedExtractTimestampMs(row, "start-time") ?? sharedExtractTimestampMs(row, "start");
+  const end = sharedExtractTimestampMs(row, "end-time") ?? sharedExtractTimestampMs(row, "end");
   if (start != null && end != null && end > start) {
     return end - start;
   }
 
   return 0;
-}
-
-function extractTimestampMs(row: Row, key: string): number | null {
-  const val = row[key];
-  if (val == null) return null;
-
-  if (isRow(val)) {
-    const rawValue = val["#text"];
-    if (rawValue != null) {
-      const ns = Number(rawValue);
-      if (!isNaN(ns)) return ns / 1_000_000;
-    }
-  }
-
-  const num = Number(val);
-  return isNaN(num) ? null : (num > 1_000_000 ? num / 1_000_000 : num);
 }
 
 // ── Launch type detection ───────────────────────────────────────────

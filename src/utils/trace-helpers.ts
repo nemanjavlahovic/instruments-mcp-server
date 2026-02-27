@@ -54,6 +54,20 @@ export function parseTimeLimitToMs(timeLimit: string): number {
 }
 
 /**
+ * Extract all schema names from a TOC XML string.
+ * Returns a deduplicated list of schema identifiers found in the trace.
+ */
+export function extractTableSchemas(tocXml: string): string[] {
+  const schemas = new Set<string>();
+  const regex = /schema="([^"]+)"/g;
+  let match;
+  while ((match = regex.exec(tocXml)) !== null) {
+    schemas.add(match[1]);
+  }
+  return [...schemas];
+}
+
+/**
  * Sleep for the specified milliseconds.
  */
 export function sleep(ms: number): Promise<void> {

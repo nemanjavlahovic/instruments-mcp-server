@@ -6,9 +6,9 @@
  * Prints parsed results to stdout and saves the trace for re-analysis.
  */
 
-import { spawnXctraceRecord, xctraceExport } from "./utils/xctrace.js";
-import { findTableXpath, findTrackXpath } from "./utils/trace-helpers.js";
+import { spawnXctraceRecord } from "./utils/xctrace.js";
 import { resolveDevice } from "./utils/simctl.js";
+import { parseTraceByTemplate } from "./utils/parse-trace.js";
 
 interface CliOptions {
   process?: string;
@@ -187,95 +187,3 @@ export async function runInteractiveRecord(args: string[]): Promise<void> {
   }
 }
 
-// ── Template → Parser routing (reused from simulator.ts) ──────────
-
-async function parseTraceByTemplate(tracePath: string, template: string): Promise<Record<string, unknown>> {
-  const tocXml = await xctraceExport({ inputPath: tracePath, toc: true });
-  const t = template.toLowerCase();
-
-  if (t.includes("time profiler") || t.includes("time-profiler")) {
-    const { parseTimeProfiler } = await import("./parsers/time-profiler.js");
-    const profileXpath = findTableXpath(tocXml, "time-profile");
-    const tableXml = profileXpath ? await xctraceExport({ inputPath: tracePath, xpath: profileXpath }) : tocXml;
-    let result = parseTimeProfiler(tocXml, tableXml);
-    if (result.totalSamples < 10) {
-      const sampleXpath = findTableXpath(tocXml, "time-sample");
-      if (sampleXpath) {
-        const sampleXml = await xctraceExport({ inputPath: tracePath, xpath: sampleXpath });
-        const sampleResult = parseTimeProfiler(tocXml, sampleXml);
-        if (sampleResult.totalSamples > result.totalSamples) result = sampleResult;
-      }
-    }
-    return result as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("swiftui")) {
-    const { parseSwiftUI } = await import("./parsers/swiftui.js");
-    const xpath = findTableXpath(tocXml, "view-body") || findTableXpath(tocXml, "swiftui");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseSwiftUI(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("alloc")) {
-    const { parseAllocations } = await import("./parsers/allocations.js");
-    const xpath = findTableXpath(tocXml, "alloc");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseAllocations(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("hitch") || t.includes("animation")) {
-    const { parseHangs } = await import("./parsers/hangs.js");
-    const xpath = findTableXpath(tocXml, "hang") || findTableXpath(tocXml, "hitch");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseHangs(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("launch") || t.includes("app launch")) {
-    const { parseAppLaunch } = await import("./parsers/app-launch.js");
-    const xpath =
-      findTableXpath(tocXml, "app-launch") ||
-      findTableXpath(tocXml, "lifecycle") ||
-      findTableXpath(tocXml, "os-signpost") ||
-      findTableXpath(tocXml, "signpost");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseAppLaunch(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("energy")) {
-    const { parseEnergy } = await import("./parsers/energy.js");
-    const xpath =
-      findTableXpath(tocXml, "energy") ||
-      findTableXpath(tocXml, "power") ||
-      findTableXpath(tocXml, "battery") ||
-      findTableXpath(tocXml, "diagnostics");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseEnergy(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("leak")) {
-    const { parseLeaks } = await import("./parsers/leaks.js");
-    const xpath =
-      findTableXpath(tocXml, "leak") ||
-      findTrackXpath(tocXml, "leak") ||
-      findTableXpath(tocXml, "alloc");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseLeaks(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("network")) {
-    const { parseNetwork } = await import("./parsers/network.js");
-    const xpath =
-      findTableXpath(tocXml, "http") ||
-      findTableXpath(tocXml, "network") ||
-      findTrackXpath(tocXml, "http") ||
-      findTrackXpath(tocXml, "network");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseNetwork(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  return {
-    template,
-    toc: tocXml,
-    hint: "No dedicated parser for this template. Use analyze_trace with the tracePath to drill into specific tables.",
-  };
-}

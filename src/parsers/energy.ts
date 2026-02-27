@@ -1,5 +1,9 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, extractFmt, extractNum, extractFmtNum, isRow, type Row } from "../utils/extractors.js";
+import {
+  extractRows, extractNum,
+  extractFirstNum, extractFirstStrOrFmt,
+  isRow, type Row,
+} from "../utils/extractors.js";
 
 export interface EnergyImpactSample {
   energyImpact: number;
@@ -133,13 +137,7 @@ function extractEnergyImpact(row: Row): number | null {
 }
 
 function extractComponentValue(row: Row, keys: string[]): number | null {
-  for (const key of keys) {
-    const val = extractNum(row, key);
-    if (val != null) return val;
-    const fmtVal = extractFmtNum(row, key);
-    if (fmtVal != null) return fmtVal;
-  }
-  return null;
+  return extractFirstNum(row, keys);
 }
 
 // ── Component ranking ───────────────────────────────────────────────
@@ -186,15 +184,13 @@ function detectThermalState(rows: Row[]): string | null {
   const stateOrder: Record<string, number> = { nominal: 0, fair: 1, serious: 2, critical: 3 };
 
   for (const row of rows) {
-    for (const key of ["thermal-state", "thermalState", "thermal", "thermal-pressure"]) {
-      const val = extractStr(row, key) || extractFmt(row, key);
-      if (val) {
-        const lower = val.toLowerCase();
-        for (const [state, level] of Object.entries(stateOrder)) {
-          if (lower.includes(state) && level > worstLevel) {
-            worstState = state;
-            worstLevel = level;
-          }
+    const val = extractFirstStrOrFmt(row, ["thermal-state", "thermalState", "thermal", "thermal-pressure"]);
+    if (val) {
+      const lower = val.toLowerCase();
+      for (const [state, level] of Object.entries(stateOrder)) {
+        if (lower.includes(state) && level > worstLevel) {
+          worstState = state;
+          worstLevel = level;
         }
       }
     }

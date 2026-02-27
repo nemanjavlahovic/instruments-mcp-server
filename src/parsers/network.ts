@@ -1,5 +1,9 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, extractFmt, extractNum, parseFmtDuration, parseSizeFmt, isRow, type Row } from "../utils/extractors.js";
+import {
+  extractRows, extractStr, extractFmt, extractNum,
+  extractDurationMs as sharedExtractDurationMs,
+  parseSizeFmt, type Row,
+} from "../utils/extractors.js";
 
 export interface HttpTransaction {
   url: string;
@@ -183,26 +187,10 @@ function extractBytes(row: Row, keys: string[]): number {
   return 0;
 }
 
+const DURATION_KEYS = ["duration", "elapsed-time", "time", "total-time", "response-time", "latency"];
+
 function extractDurationMs(row: Row): number {
-  for (const key of ["duration", "elapsed-time", "time", "total-time", "response-time", "latency"]) {
-    const val = row[key] ?? row[`@_${key}`];
-    if (val != null) {
-      if (isRow(val)) {
-        const rawValue = val["#text"];
-        if (rawValue != null) {
-          const ns = Number(rawValue);
-          if (!isNaN(ns)) return ns / 1_000_000;
-        }
-        const fmt = val["@_fmt"];
-        if (typeof fmt === "string") return parseFmtDuration(fmt);
-      }
-      const num = Number(val);
-      if (!isNaN(num)) {
-        return num > 1_000_000 ? num / 1_000_000 : num;
-      }
-    }
-  }
-  return 0;
+  return sharedExtractDurationMs(row, DURATION_KEYS);
 }
 
 function truncateUrl(url: string): string {

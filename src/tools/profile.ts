@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { xctraceRecord, xctraceExport, getTraceOutputDir } from "../utils/xctrace.js";
-import { findTableXpath, findTrackXpath } from "../utils/trace-helpers.js";
+import { findTableXpath, findTrackXpath, extractTableSchemas } from "../utils/trace-helpers.js";
+import { storeTrace, getTrace, getOrBuildCallTree } from "../utils/trace-store.js";
+import { formatProfileResult } from "../utils/format-output.js";
+import { autoInvestigate } from "../utils/auto-investigate.js";
 import { parseTimeProfiler } from "../parsers/time-profiler.js";
 import { parseSwiftUI } from "../parsers/swiftui.js";
 import { parseAllocations } from "../parsers/allocations.js";
@@ -27,6 +30,27 @@ async function resolveTrace(
     timeLimit: opts.duration,
   });
   return tracePath;
+}
+
+/**
+ * Format a profile result with auto-investigation and return MCP tool output.
+ */
+function formatAndReturn(
+  template: string,
+  result: Record<string, unknown>,
+  traceId: string,
+  tracePath: string,
+) {
+  // Build call tree for CPU traces to feed auto-investigate
+  const trace = getTrace(traceId);
+  const callTree = trace ? getOrBuildCallTree(trace) : null;
+
+  const investigation = autoInvestigate(template, result, callTree, traceId);
+  if (trace) trace.investigation = investigation;
+
+  const formatted = formatProfileResult(template, result, traceId, tracePath);
+  const text = investigation ? `${formatted}\n\n${investigation}` : formatted;
+  return { content: [{ type: "text" as const, text }] };
 }
 
 /** Common trace_path parameter for re-analysis of existing traces */
@@ -57,7 +81,8 @@ Pass trace_path to re-analyze an existing trace without re-recording.`,
           tableXml = await xctraceExport({ inputPath: tracePath, xpath: profileXpath });
         }
 
-        let result = parseTimeProfiler(tocXml, tableXml || tocXml);
+        let usedXml = tableXml || tocXml;
+        let result = parseTimeProfiler(tocXml, usedXml);
         // Deferred mode (xctrace 26+) often leaves time-profile nearly empty;
         // fall back to time-sample if we got suspiciously few samples
         if (result.totalSamples < 10) {
@@ -67,13 +92,13 @@ Pass trace_path to re-analyze an existing trace without re-recording.`,
             const sampleResult = parseTimeProfiler(tocXml, sampleXml);
             if (sampleResult.totalSamples > result.totalSamples) {
               result = sampleResult;
+              usedXml = sampleXml;
             }
           }
         }
 
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ ...result, tracePath }, null, 2) }],
-        };
+        const traceId = storeTrace({ tracePath, template: "Time Profiler", tableXml: usedXml, parsedResult: result as unknown as Record<string, unknown> });
+        return formatAndReturn("Time Profiler", result as unknown as Record<string, unknown>, traceId, tracePath);
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Profiling failed: ${e}` }], isError: true };
       }
@@ -101,9 +126,8 @@ Best used while navigating through the app. Pass trace_path to re-analyze an exi
         const tableXml = tableXpath ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath }) : tocXml;
 
         const result = parseSwiftUI(tocXml, tableXml);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ ...result, tracePath }, null, 2) }],
-        };
+        const traceId = storeTrace({ tracePath, template: "SwiftUI", tableXml, parsedResult: result as unknown as Record<string, unknown> });
+        return formatAndReturn("SwiftUI", result as unknown as Record<string, unknown>, traceId, tracePath);
       } catch (e) {
         return { content: [{ type: "text" as const, text: `SwiftUI profiling failed: ${e}` }], isError: true };
       }
@@ -131,9 +155,8 @@ Pass trace_path to re-analyze an existing trace.`,
         const tableXml = tableXpath ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath }) : tocXml;
 
         const result = parseAllocations(tocXml, tableXml);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ ...result, tracePath }, null, 2) }],
-        };
+        const traceId = storeTrace({ tracePath, template: "Allocations", tableXml, parsedResult: result as unknown as Record<string, unknown> });
+        return formatAndReturn("Allocations", result as unknown as Record<string, unknown>, traceId, tracePath);
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Memory profiling failed: ${e}` }], isError: true };
       }
@@ -161,9 +184,8 @@ Best used during scrolling or animations. Pass trace_path to re-analyze an exist
         const tableXml = tableXpath ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath }) : tocXml;
 
         const result = parseHangs(tocXml, tableXml);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ ...result, tracePath }, null, 2) }],
-        };
+        const traceId = storeTrace({ tracePath, template: "Animation Hitches", tableXml, parsedResult: result as unknown as Record<string, unknown> });
+        return formatAndReturn("Animation Hitches", result as unknown as Record<string, unknown>, traceId, tracePath);
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Hitch profiling failed: ${e}` }], isError: true };
       }
@@ -196,9 +218,8 @@ Pass trace_path to re-analyze an existing trace.`,
         const tableXml = tableXpath ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath }) : tocXml;
 
         const result = parseAppLaunch(tocXml, tableXml);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ ...result, tracePath }, null, 2) }],
-        };
+        const traceId = storeTrace({ tracePath, template: "App Launch", tableXml, parsedResult: result as unknown as Record<string, unknown> });
+        return formatAndReturn("App Launch", result as unknown as Record<string, unknown>, traceId, tracePath);
       } catch (e) {
         return { content: [{ type: "text" as const, text: `App launch profiling failed: ${e}` }], isError: true };
       }
@@ -231,9 +252,8 @@ Best results on physical devices. Pass trace_path to re-analyze an existing trac
         const tableXml = tableXpath ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath }) : tocXml;
 
         const result = parseEnergy(tocXml, tableXml);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ ...result, tracePath }, null, 2) }],
-        };
+        const traceId = storeTrace({ tracePath, template: "Energy Log", tableXml, parsedResult: result as unknown as Record<string, unknown> });
+        return formatAndReturn("Energy Log", result as unknown as Record<string, unknown>, traceId, tracePath);
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Energy profiling failed: ${e}` }], isError: true };
       }
@@ -266,9 +286,8 @@ Pass trace_path to re-analyze an existing trace.`,
         const tableXml = tableXpath ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath }) : tocXml;
 
         const result = parseLeaks(tocXml, tableXml);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ ...result, tracePath }, null, 2) }],
-        };
+        const traceId = storeTrace({ tracePath, template: "Leaks", tableXml, parsedResult: result as unknown as Record<string, unknown> });
+        return formatAndReturn("Leaks", result as unknown as Record<string, unknown>, traceId, tracePath);
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Leak detection failed: ${e}` }], isError: true };
       }
@@ -301,9 +320,8 @@ Pass trace_path to re-analyze an existing trace.`,
         const tableXml = tableXpath ? await xctraceExport({ inputPath: tracePath, xpath: tableXpath }) : tocXml;
 
         const result = parseNetwork(tocXml, tableXml);
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ ...result, tracePath }, null, 2) }],
-        };
+        const traceId = storeTrace({ tracePath, template: "Network", tableXml, parsedResult: result as unknown as Record<string, unknown> });
+        return formatAndReturn("Network", result as unknown as Record<string, unknown>, traceId, tracePath);
       } catch (e) {
         return { content: [{ type: "text" as const, text: `Network profiling failed: ${e}` }], isError: true };
       }
@@ -334,6 +352,8 @@ You can then use analyze_trace to export specific tables.`,
         });
 
         const tocXml = await xctraceExport({ inputPath: tracePath, toc: true });
+        const schemas = extractTableSchemas(tocXml);
+        const traceId = storeTrace({ tracePath, template, tableXml: tocXml });
 
         return {
           content: [
@@ -343,8 +363,9 @@ You can then use analyze_trace to export specific tables.`,
                 {
                   template,
                   tracePath,
-                  toc: tocXml,
-                  hint: "Use analyze_trace with the tracePath and an xpath from the TOC to drill into specific tables.",
+                  traceId,
+                  availableSchemas: schemas,
+                  hint: "Use analyze_trace with tracePath and an xpath to export specific tables, or drill_down with traceId to search the data.",
                 },
                 null,
                 2

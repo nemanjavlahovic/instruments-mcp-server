@@ -8,6 +8,11 @@ import {
   parseFmtDuration,
   parseSizeFmt,
   formatBytes,
+  extractDurationMs,
+  extractTimestampMs,
+  extractFirstStr,
+  extractFirstStrOrFmt,
+  extractFirstNum,
   type Row,
 } from "../utils/extractors.js";
 import { parseXml } from "../utils/xml.js";
@@ -338,5 +343,157 @@ describe("formatBytes", () => {
 
   it("formats large MB values", () => {
     expect(formatBytes(100 * 1024 * 1024)).toBe("100.0 MB");
+  });
+});
+
+// ── extractDurationMs ────────────────────────────────────────────────
+
+describe("extractDurationMs", () => {
+  const keys = ["duration", "elapsed-time"];
+
+  it("extracts from @_fmt formatted string (preferred)", () => {
+    const row: Row = { duration: { "@_fmt": "500 ms", "#text": 500000000 } };
+    expect(extractDurationMs(row, keys)).toBe(500);
+  });
+
+  it("falls back to #text nanoseconds when @_fmt fails", () => {
+    const row: Row = { duration: { "#text": 250000000 } };
+    expect(extractDurationMs(row, keys)).toBe(250);
+  });
+
+  it("converts plain nanosecond values (>= 1_000_000)", () => {
+    const row: Row = { duration: 5000000 };
+    expect(extractDurationMs(row, keys)).toBe(5);
+  });
+
+  it("treats plain values < 1_000_000 as milliseconds", () => {
+    const row: Row = { duration: 150 };
+    expect(extractDurationMs(row, keys)).toBe(150);
+  });
+
+  it("tries second key when first is missing", () => {
+    const row: Row = { "elapsed-time": { "@_fmt": "1.5 s" } };
+    expect(extractDurationMs(row, keys)).toBe(1500);
+  });
+
+  it("tries @_-prefixed attribute keys", () => {
+    const row: Row = { "@_duration": 2000000 };
+    expect(extractDurationMs(row, keys)).toBe(2);
+  });
+
+  it("returns 0 when no keys match", () => {
+    const row: Row = { other: 100 };
+    expect(extractDurationMs(row, keys)).toBe(0);
+  });
+
+  it("parses microseconds from @_fmt", () => {
+    const row: Row = { duration: { "@_fmt": "500 \u03bcs" } };
+    expect(extractDurationMs(row, keys)).toBe(0.5);
+  });
+});
+
+// ── extractTimestampMs ───────────────────────────────────────────────
+
+describe("extractTimestampMs", () => {
+  it("extracts from #text nanoseconds", () => {
+    const row: Row = { "start-time": { "#text": 1000000000 } };
+    expect(extractTimestampMs(row, "start-time")).toBe(1000);
+  });
+
+  it("converts plain nanosecond values", () => {
+    const row: Row = { "start-time": 5000000 };
+    expect(extractTimestampMs(row, "start-time")).toBe(5);
+  });
+
+  it("treats plain values <= 1_000_000 as milliseconds", () => {
+    const row: Row = { "start-time": 500 };
+    expect(extractTimestampMs(row, "start-time")).toBe(500);
+  });
+
+  it("returns null for missing key", () => {
+    const row: Row = {};
+    expect(extractTimestampMs(row, "start-time")).toBeNull();
+  });
+
+  it("returns null for non-numeric value", () => {
+    const row: Row = { "start-time": "not-a-number" };
+    expect(extractTimestampMs(row, "start-time")).toBeNull();
+  });
+});
+
+// ── extractFirstStr ──────────────────────────────────────────────────
+
+describe("extractFirstStr", () => {
+  it("returns value from first matching key", () => {
+    const row: Row = { name: "func1" };
+    expect(extractFirstStr(row, ["symbol", "name"])).toBe("func1");
+  });
+
+  it("skips missing keys and returns first match", () => {
+    const row: Row = { type: "MyView" };
+    expect(extractFirstStr(row, ["view-name", "symbol", "type"])).toBe("MyView");
+  });
+
+  it("returns null when no keys match", () => {
+    const row: Row = { other: "value" };
+    expect(extractFirstStr(row, ["name", "symbol"])).toBeNull();
+  });
+
+  it("returns first match even if later keys also match", () => {
+    const row: Row = { symbol: "first", name: "second" };
+    expect(extractFirstStr(row, ["symbol", "name"])).toBe("first");
+  });
+});
+
+// ── extractFirstStrOrFmt ─────────────────────────────────────────────
+
+describe("extractFirstStrOrFmt", () => {
+  it("returns extractStr value when available", () => {
+    const row: Row = { name: "plain" };
+    expect(extractFirstStrOrFmt(row, ["name"])).toBe("plain");
+  });
+
+  it("falls back to extractFmt when extractStr returns null", () => {
+    const row: Row = { name: { "@_fmt": "formatted" } };
+    expect(extractFirstStrOrFmt(row, ["name"])).toBe("formatted");
+  });
+
+  it("tries multiple keys", () => {
+    const row: Row = { library: { "@_fmt": "MyLib" } };
+    expect(extractFirstStrOrFmt(row, ["binary", "library"])).toBe("MyLib");
+  });
+
+  it("returns null when no keys match", () => {
+    const row: Row = {};
+    expect(extractFirstStrOrFmt(row, ["name", "type"])).toBeNull();
+  });
+});
+
+// ── extractFirstNum ──────────────────────────────────────────────────
+
+describe("extractFirstNum", () => {
+  it("returns extractNum value when available", () => {
+    const row: Row = { count: 42 };
+    expect(extractFirstNum(row, ["count"])).toBe(42);
+  });
+
+  it("falls back to extractFmtNum when extractNum returns null", () => {
+    const row: Row = { impact: { "@_fmt": "12/20" } };
+    expect(extractFirstNum(row, ["impact"])).toBe(12);
+  });
+
+  it("tries multiple keys in order", () => {
+    const row: Row = { "gpu-energy": 5 };
+    expect(extractFirstNum(row, ["cpu-energy", "gpu-energy"])).toBe(5);
+  });
+
+  it("returns null when no keys match", () => {
+    const row: Row = {};
+    expect(extractFirstNum(row, ["count", "instances"])).toBeNull();
+  });
+
+  it("returns zero correctly", () => {
+    const row: Row = { count: 0 };
+    expect(extractFirstNum(row, ["count"])).toBe(0);
   });
 });

@@ -147,3 +147,100 @@ export function formatBytes(bytes: number): string {
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${bytes} bytes`;
 }
+
+// ── Multi-key extraction helpers ──────────────────────────────────────
+
+/**
+ * Extract a duration in milliseconds from a row, trying multiple field names.
+ * Handles xctrace formats:
+ *   - Object with @_fmt (e.g., "500 ms") — preferred (unambiguous)
+ *   - Object with #text (nanoseconds) — fallback
+ *   - Plain numeric — uses heuristic: >= 1_000_000 assumed nanoseconds
+ */
+export function extractDurationMs(row: Row, keys: string[]): number {
+  for (const key of keys) {
+    const val = row[key] ?? row[`@_${key}`];
+    if (val == null) continue;
+
+    if (isRow(val)) {
+      // Prefer formatted string — it's unambiguous
+      const fmt = val["@_fmt"];
+      if (typeof fmt === "string") {
+        const ms = parseFmtDuration(fmt);
+        if (ms > 0) return ms;
+      }
+      // Fall back to raw #text value (nanoseconds in xctrace)
+      const rawText = val["#text"];
+      if (rawText != null) {
+        const ns = Number(rawText);
+        if (!isNaN(ns)) return ns / 1_000_000;
+      }
+      continue;
+    }
+
+    const num = Number(val);
+    if (!isNaN(num)) {
+      // xctrace nanosecond values are >= 1_000_000 (1ms).
+      // Realistic durations in ms are < 1_000_000 (1000s).
+      // Use 1_000_000 as threshold: at or above = nanoseconds, below = milliseconds.
+      return num >= 1_000_000 ? num / 1_000_000 : num;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Extract a timestamp in milliseconds from a row field.
+ * Handles xctrace format: { #text: nanoseconds } or plain numeric.
+ */
+export function extractTimestampMs(row: Row, key: string): number | null {
+  const val = row[key];
+  if (val == null) return null;
+
+  if (isRow(val)) {
+    const rawValue = val["#text"];
+    if (rawValue != null) {
+      const ns = Number(rawValue);
+      if (!isNaN(ns)) return ns / 1_000_000;
+    }
+  }
+
+  const num = Number(val);
+  return isNaN(num) ? null : (num > 1_000_000 ? num / 1_000_000 : num);
+}
+
+/**
+ * Try extracting a string value from the first matching key.
+ */
+export function extractFirstStr(row: Row, keys: string[]): string | null {
+  for (const key of keys) {
+    const val = extractStr(row, key);
+    if (val) return val;
+  }
+  return null;
+}
+
+/**
+ * Try extracting a string value (str then fmt) from the first matching key.
+ */
+export function extractFirstStrOrFmt(row: Row, keys: string[]): string | null {
+  for (const key of keys) {
+    const val = extractStr(row, key) || extractFmt(row, key);
+    if (val) return val;
+  }
+  return null;
+}
+
+/**
+ * Try extracting a numeric value from the first matching key.
+ * For each key, tries extractNum then extractFmtNum.
+ */
+export function extractFirstNum(row: Row, keys: string[]): number | null {
+  for (const key of keys) {
+    const val = extractNum(row, key);
+    if (val != null) return val;
+    const fmtVal = extractFmtNum(row, key);
+    if (fmtVal != null) return fmtVal;
+  }
+  return null;
+}

@@ -1,6 +1,6 @@
 {
   "name": "instrumentsmcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "AI-native performance profiling for iOS and macOS apps. Profile while you use the app — start/stop recording, simulator control, scenario automation, all through Xcode Instruments via MCP.",
   "type": "module",
   "main": "dist/index.js",

@@ -1,5 +1,5 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, type Row } from "../utils/extractors.js";
+import { extractRows, extractFirstStr, type Row } from "../utils/extractors.js";
 
 export interface ViewBodyEvaluation {
   viewName: string;
@@ -69,11 +69,8 @@ export function parseSwiftUI(tocXml: string, tableXml: string): SwiftUIProfileRe
 // ── SwiftUI specific helpers ────────────────────────────────────────
 
 function extractViewName(row: Row): string | null {
-  for (const key of ["view-name", "symbol", "name", "type"]) {
-    const val = extractStr(row, key);
-    if (val) return cleanViewName(val);
-  }
-  return null;
+  const raw = extractFirstStr(row, ["view-name", "symbol", "name", "type"]);
+  return raw ? cleanViewName(raw) : null;
 }
 
 function cleanViewName(name: string): string {

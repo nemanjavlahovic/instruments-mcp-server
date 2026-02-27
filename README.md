@@ -13,11 +13,47 @@
 
 **AI-native performance profiling for iOS and macOS apps.**
 
-InstrumentsMCP gives AI agents the ability to record Instruments traces while you use your app, parse the results, and tell you exactly what's slow — without you opening Instruments once.
+InstrumentsMCP gives AI agents the ability to record Instruments traces, automate simulator interaction, parse the results, and tell you exactly what's slow — without you opening Instruments once.
 
-> "Start profiling while I scroll the feed" → you scroll → "Stop" → structured findings with severity ratings → AI suggests the fix
+> "Profile CPU while scrolling the feed" → agent starts recording, taps through the app, scrolls the feed → stops → structured findings with severity ratings → AI suggests the fix
 
 ## How It Works
+
+### Hands-Free Profiling (UI Automation + Instruments)
+
+The agent records an Instruments trace while programmatically interacting with your app — no human interaction needed:
+
+```
+You:   "Profile CPU while scrolling through the feed and searching for users"
+Agent: calls profile_scenario({
+         bundle_id: "com.example.MyApp",
+         template: "Time Profiler",
+         duration: "20s",
+         scenario: [
+           { action: "launch" },
+           { action: "wait", seconds: 2 },
+           { action: "gesture", preset: "scroll-down" },
+           { action: "wait", seconds: 1 },
+           { action: "gesture", preset: "scroll-down" },
+           { action: "tap", label: "Search" },
+           { action: "type_text", text: "nema" },
+           { action: "wait", seconds: 2 },
+           { action: "snapshot_ui", label: "search-results" }
+         ]
+       })
+Agent: "=== Time Profiler ===  severity: [WARNING]  samples: 1587
+
+       Hotspots:
+         UpdateStack::update() (AttributeGraph)  42.3ms self ━━━━━━╌╌╌╌╌╌╌╌╌ 12.1%
+         FeedViewModel.loadItems() (MyApp)        28.1ms self ━━━━╌╌╌╌╌╌╌╌╌╌╌ 8.0%
+
+       Main thread blockers:
+         [WARNING] FeedViewModel.loadItems()  28.1ms
+
+       trace: abc123 | path: ~/.instruments-mcp/traces/..."
+```
+
+UI automation is powered by [AXe CLI](https://github.com/cameroncooke/AXe) — tap, type, swipe, and read the accessibility hierarchy on any booted simulator.
 
 ### CLI Recording (Ctrl+C to stop)
 
@@ -37,12 +73,10 @@ instrumentsmcp record --process MyApp --template "Time Profiler"
   Stopping recording...
   Recording stopped (23.4s)
 
-  {
-    "hotspots": [
-      { "function": "FeedViewModel.loadItems()", "selfPercent": 18.3, "severity": "critical" }
-    ],
-    "summary": "Hottest function: FeedViewModel.loadItems() (18.3% CPU)."
-  }
+  === Time Profiler ===  severity: [CRITICAL]  samples: 2341
+
+  Hotspots:
+    FeedViewModel.loadItems() (MyApp)  42.3ms self ━━━━━━━━━╌╌╌╌╌╌ 18.3%
 
   Trace saved: ~/.instruments-mcp/traces/profile-1234567890.trace
   Re-analyze: Tell your AI agent "Analyze the trace at ~/.instruments-mcp/traces/..."
@@ -69,32 +103,6 @@ Agent: "Found 3 issues:
         3. CGPath recreation in card corners — 10K allocations in 15s (warning)"
 ```
 
-The agent gets structured JSON with severity ratings and suggests code fixes — all from real usage, not an idle app sitting there doing nothing.
-
-### Scenario Profiling (automated)
-
-For repeatable tests, define a scenario with deep links and the agent drives the simulator while Instruments records:
-
-```
-You:   "Profile CPU while navigating through the onboarding flow"
-Agent: calls profile_scenario({
-         bundle_id: "com.example.MyApp",
-         template: "Time Profiler",
-         duration: "20s",
-         scenario: [
-           { action: "launch" },
-           { action: "wait", seconds: 2 },
-           { action: "open_url", url: "myapp://onboarding/step1" },
-           { action: "wait", seconds: 3 },
-           { action: "open_url", url: "myapp://onboarding/step2" },
-           { action: "wait", seconds: 3 },
-           { action: "screenshot", label: "step2" }
-         ]
-       })
-```
-
-Scenarios are deterministic — run the same flow before and after an optimization to measure the difference.
-
 ### One-Shot Profiling
 
 For quick checks, every profiling tool works standalone:
@@ -113,15 +121,32 @@ Agent: calls profile_leaks({ process: "MyApp", duration: "30s" })
 | `profile_memory` | Memory by category, persistent vs transient, largest allocators | >50MB or >100k allocs critical |
 | `profile_hitches` | Animation hangs with backtraces and duration classification | >1s critical, >250ms warning |
 | `profile_launch` | App launch time, phase breakdown, cold/warm/resume detection | >1s cold critical, >500ms warm critical |
-| `profile_energy` | Energy impact scores (0–20), per-component breakdown, thermal state | Avg ≥13 or peak ≥20 critical |
+| `profile_energy` | Energy impact scores (0-20), per-component breakdown, thermal state | Avg >=13 or peak >=20 critical |
 | `profile_leaks` | Leaked objects by type, sizes, responsible libraries | >100 leaks or >10MB total critical |
 | `profile_network` | HTTP traffic: request counts, durations, error rates, per-domain breakdown | >10% errors or >5s response critical |
 | `performance_audit` | Combined CPU + Hitches + Leaks + Energy + Network health check | Worst severity across all five |
-| `profile_raw` | Any template — raw table of contents for custom analysis | — |
+| `profile_raw` | Any template - raw table of contents for custom analysis | - |
+
+## UI Automation
+
+InstrumentsMCP can interact with simulator UI elements directly — tap buttons, type text, swipe, scroll, and read the accessibility hierarchy. These tools work standalone for UI testing or as steps in `profile_scenario` for hands-free performance profiling.
+
+Requires [AXe CLI](https://github.com/cameroncooke/AXe): `brew tap cameroncooke/axe && brew install axe`
+
+| Tool | What It Does |
+|---|---|
+| `ui_snapshot` | Get the accessibility hierarchy — element roles, labels, identifiers, and frame coordinates |
+| `ui_tap` | Tap by accessibility id (most reliable), label, or x/y coordinates |
+| `ui_type` | Type text into the currently focused field |
+| `ui_swipe` | Swipe between two points |
+| `ui_gesture` | Preset gestures: scroll-up/down/left/right, swipe-from-*-edge |
+| `ui_long_press` | Touch-and-hold at coordinates |
+
+The agent reads the screen with `ui_snapshot`, finds elements, and interacts with them — just like a human would, but programmatically.
 
 ## Simulator Control
 
-InstrumentsMCP can interact with iOS Simulators directly — launch apps, navigate via deep links, take screenshots, send push notifications, and more. These tools work standalone or as building blocks for `profile_scenario`.
+InstrumentsMCP can manage iOS Simulators directly — launch apps, navigate via deep links, take screenshots, send push notifications, and more. These tools work standalone or as building blocks for `profile_scenario`.
 
 | Tool | What It Does |
 |---|---|
@@ -134,27 +159,23 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
 | `sim_set_appearance` | Toggle light/dark mode |
 | `sim_set_location` | Set simulated GPS coordinates |
 
-> **Note:** `simctl` does not support tap/swipe gestures. Use deep links (`sim_open_url`) for navigation — your app must register URL schemes in Info.plist. For automated UI interaction, pair InstrumentsMCP with [XcodeBuildMCP](https://github.com/nicklanger/XcodeBuildMCP) which handles the build and run side.
-
 ## Example Output
 
 <details>
-<summary><b>CPU Profiling</b></summary>
+<summary><b>CPU Profiling (compact text format)</b></summary>
 
-```json
-{
-  "hotspots": [
-    {
-      "function": "FeedViewModel.loadItems()",
-      "module": "MyApp",
-      "selfPercent": 18.3,
-      "totalPercent": 24.1,
-      "severity": "critical"
-    }
-  ],
-  "severity": "critical",
-  "summary": "Hottest function: FeedViewModel.loadItems() (18.3% CPU). 3 user-code hotspots identified."
-}
+```
+=== Time Profiler ===  severity: [WARNING]  samples: 1587
+
+Hotspots:
+  UpdateStack::update() (AttributeGraph)  42.3ms self ━━━━━━╌╌╌╌╌╌╌╌╌ 12.1%
+  FeedViewModel.loadItems() (MyApp)        28.1ms self ━━━━╌╌╌╌╌╌╌╌╌╌╌ 8.0%
+  LayoutComputer::doAlignment() (SwiftUI)  15.2ms self ━━╌╌╌╌╌╌╌╌╌╌╌╌╌ 4.3%
+
+Main thread blockers:
+  [WARNING] FeedViewModel.loadItems()  28.1ms
+
+trace: abc123 | path: ~/.instruments-mcp/traces/profile-1234567890.trace
 ```
 
 </details>
@@ -162,20 +183,17 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
 <details>
 <summary><b>SwiftUI View Performance</b></summary>
 
-```json
-{
-  "template": "SwiftUI",
-  "totalBodyEvaluations": 847,
-  "excessiveEvaluations": [
-    {
-      "viewName": "FeedCardView",
-      "evaluationCount": 156,
-      "averageDurationUs": 420,
-      "severity": "critical"
-    }
-  ],
-  "summary": "847 total body evaluations across 23 views. 1 view with excessive re-evaluations: FeedCardView."
-}
+```
+=== SwiftUI ===  severity: [WARNING]  total evals: 847  views: 23
+
+Views:
+  [CRITICAL] FeedCardView  x156  65.5ms
+  [WARNING] AvatarView     x89   12.3ms
+  [OK] HeaderView          x12   1.2ms
+
+Excessive re-renders: 2 views flagged
+
+trace: abc123 | path: ~/.instruments-mcp/traces/profile-1234567890.trace
 ```
 
 </details>
@@ -183,19 +201,15 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
 <details>
 <summary><b>App Launch</b></summary>
 
-```json
-{
-  "template": "App Launch",
-  "totalLaunchMs": 1340,
-  "launchType": "cold",
-  "severity": "critical",
-  "phases": [
-    { "name": "Dynamic Library Loading", "durationMs": 580, "severity": "critical" },
-    { "name": "UIKit Initialization", "durationMs": 310, "severity": "critical" },
-    { "name": "Initial Frame Rendering", "durationMs": 290, "severity": "warning" }
-  ],
-  "summary": "App launch (cold): 1340ms — CRITICAL. Target: <400ms cold, <200ms warm."
-}
+```
+=== App Launch ===  severity: [CRITICAL]  total: 1340ms  type: cold
+
+Phases:
+  [CRITICAL] Dynamic Library Loading  580ms  ━━━━━━━━━━━━━━━
+  [CRITICAL] UIKit Initialization     310ms  ━━━━━━━━╌╌╌╌╌╌╌
+  [WARNING] Initial Frame Rendering   290ms  ━━━━━━━╌╌╌╌╌╌╌╌
+
+trace: abc123 | path: ~/.instruments-mcp/traces/profile-1234567890.trace
 ```
 
 </details>
@@ -203,27 +217,48 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
 <details>
 <summary><b>Animation Hitches</b></summary>
 
-```json
-{
-  "template": "Animation Hitches",
-  "totalHangs": 3,
-  "criticalHangs": 1,
-  "warningHangs": 2,
-  "summary": "3 hang events detected. 1 CRITICAL hang (>1s). 2 warning hangs (250ms-1s). Worst hang: 1240ms."
-}
+```
+=== Animation Hitches ===  severity: [CRITICAL]  total: 3 (1 critical, 2 warning, 0 minor, 0 micro)
+
+Hang events:
+  [CRITICAL] 1240ms  start: 5.2s
+    stack: FeedViewModel.loadItems() > NetworkManager.fetch() > URLSession.data()
+  [WARNING] 380ms  start: 12.1s
+
+trace: abc123 | path: ~/.instruments-mcp/traces/profile-1234567890.trace
 ```
 
 </details>
 
-## All 29 Tools
+<details>
+<summary><b>Memory Leaks</b></summary>
+
+```
+=== Leaks ===  severity: [WARNING]  total: 12 objects  4.8 KB
+
+Leak groups:
+  [WARNING] NSMutableArray (Foundation)  x5  2.1 KB
+  [minor] ClosureContext (MyApp)         x4  1.6 KB
+  [minor] NSObject (CoreFoundation)      x3  1.1 KB
+
+By library:
+  Foundation  5 leaks  2.1 KB
+  MyApp       4 leaks  1.6 KB
+
+trace: abc123 | path: ~/.instruments-mcp/traces/profile-1234567890.trace
+```
+
+</details>
+
+## All 35 Tools
 
 ### Interactive Profiling
 
 | Tool | What It Does |
 |---|---|
-| `start_profiling` | Start recording a trace in the background — user interacts with the app manually |
+| `start_profiling` | Start recording a trace in the background - user interacts with the app manually |
 | `stop_profiling` | Stop recording, parse the trace, return structured results |
-| `profile_scenario` | Record a trace while executing a scripted scenario on a simulator |
+| `profile_scenario` | Record a trace while executing a scripted scenario (deep links + UI automation) |
 
 ### One-Shot Profiling
 
@@ -240,6 +275,17 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
 | `profile_raw` | Any | Raw table of contents for templates without a dedicated parser |
 | `performance_audit` | 5 templates | Combined CPU + Hitches + Leaks + Energy + Network health check |
 
+### UI Automation
+
+| Tool | What It Does |
+|---|---|
+| `ui_snapshot` | Get accessibility hierarchy - element roles, labels, identifiers, frame coordinates |
+| `ui_tap` | Tap by accessibility id, label, or x/y coordinates |
+| `ui_type` | Type text into focused field |
+| `ui_swipe` | Swipe between two points |
+| `ui_gesture` | Preset gestures (scroll, edge swipes) |
+| `ui_long_press` | Touch-and-hold at coordinates |
+
 ### Simulator Control
 
 | Tool | What It Does |
@@ -253,11 +299,13 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
 | `sim_set_appearance` | Toggle light/dark mode |
 | `sim_set_location` | Set simulated GPS coordinates |
 
-### Analysis & Baselines
+### Analysis & Investigation
 
 | Tool | What It Does |
 |---|---|
 | `analyze_trace` | Export specific tables from existing `.trace` files by xpath |
+| `drill_down` | Drill into a specific function, domain, or view from a previous profile result |
+| `list_traces` | List recently profiled traces available for re-analysis |
 | `symbolicate_trace` | Add debug symbols so function names appear instead of addresses |
 | `performance_baseline` | Save, compare, list, or delete performance baselines for regression tracking |
 | `performance_report` | Generate shareable Markdown performance reports from profile results |
@@ -277,6 +325,7 @@ InstrumentsMCP can interact with iOS Simulators directly — launch apps, naviga
 
 - macOS with Xcode installed (`xctrace` CLI)
 - Node.js >= 20
+- **Optional**: [AXe CLI](https://github.com/cameroncooke/AXe) for UI automation (`brew tap cameroncooke/axe && brew install axe`)
 
 ### Claude Code
 
@@ -313,7 +362,7 @@ Then point your MCP client to `dist/index.js`.
 
 ### CLI Recording (no MCP client needed)
 
-Record a trace from any terminal — no AI agent required:
+Record a trace from any terminal - no AI agent required:
 
 ```bash
 npx instrumentsmcp record --process MyApp
@@ -334,6 +383,8 @@ src/
 │   ├── simulator.ts      # Simulator control + start/stop + scenario profiling
 │   ├── analyze.ts        # Trace analysis + symbolication + performance audit
 │   ├── baseline.ts       # Baseline comparison + Markdown report generation
+│   ├── investigate.ts    # Drill-down into specific functions/views + trace listing
+│   ├── ui.ts             # UI automation tools (snapshot, tap, type, swipe, gesture)
 │   └── list.ts           # Discovery tools (status, templates, devices)
 ├── parsers/              # Template-specific XML→JSON parsers with severity classification
 │   ├── time-profiler.ts, swiftui.ts, allocations.ts, hangs.ts,
@@ -341,12 +392,17 @@ src/
 └── utils/
     ├── xctrace.ts        # xctrace CLI wrapper (record, export, spawn, symbolicate)
     ├── simctl.ts         # simctl CLI wrapper (simulator interaction + device resolution)
+    ├── axe.ts            # AXe CLI wrapper (UI automation — tap, type, swipe, describe)
     ├── trace-helpers.ts  # Shared xpath resolution and timing helpers
+    ├── trace-store.ts    # In-memory trace store for multi-turn investigation
+    ├── parse-trace.ts    # Template→parser routing (shared by CLI, tools, scenario)
+    ├── format-output.ts  # Compact text formatters for LLM-friendly output
+    ├── auto-investigate.ts # Pre-computed investigation findings from profile results
     ├── extractors.ts     # Shared XML row/field extractors
     └── xml.ts            # XML parsing (fast-xml-parser)
 ```
 
-Each Instruments template has a dedicated parser with domain-specific heuristics. Severity thresholds are tuned per metric type. Traces are stored in `~/.instruments-mcp/traces/` for reuse and comparison.
+Each Instruments template has a dedicated parser with domain-specific heuristics. Severity thresholds are tuned per metric type. Profile results use compact text formatting (~80% smaller than JSON) optimized for LLM context windows. Traces are stored in `~/.instruments-mcp/traces/` for reuse and comparison.
 
 ## Compatibility
 
@@ -355,6 +411,7 @@ Each Instruments template has a dedicated parser with domain-specific heuristics
 - Retry logic for intermittent xctrace export failures
 - Device identifiers (`booted`, device name, UDID) are automatically resolved to simulator UDIDs
 - Simulator interaction requires a booted iOS Simulator
+- UI automation requires [AXe CLI](https://github.com/cameroncooke/AXe) (graceful degradation with install instructions if missing)
 
 ## License
 

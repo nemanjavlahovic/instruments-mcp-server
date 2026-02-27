@@ -16,6 +16,8 @@ if (process.argv[2] === "record") {
   const { registerAnalyzeTools } = await import("./tools/analyze.js");
   const { registerBaselineTools } = await import("./tools/baseline.js");
   const { registerSimulatorTools } = await import("./tools/simulator.js");
+  const { registerUITools } = await import("./tools/ui.js");
+  const { registerInvestigateTools } = await import("./tools/investigate.js");
 
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const pkg = JSON.parse(readFileSync(resolve(__dirname, "..", "package.json"), "utf-8"));
@@ -31,6 +33,8 @@ if (process.argv[2] === "record") {
   registerAnalyzeTools(server);
   registerBaselineTools(server);
   registerSimulatorTools(server);
+  registerUITools(server);
+  registerInvestigateTools(server);
 
   // Start the server
   const transport = new StdioServerTransport();

@@ -1,5 +1,5 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, isRow, parseFmtDuration, type Row } from "../utils/extractors.js";
+import { extractRows, extractStr, extractDurationMs, isRow, type Row } from "../utils/extractors.js";
 
 export interface HangEvent {
   duration: string;
@@ -28,8 +28,9 @@ export function parseHangs(tocXml: string, tableXml: string): HangsResult {
   const tableData = parseXml(tableXml);
   const rows = extractRows(tableData);
 
+  const durationKeys = ["duration", "hang-duration", "hitch-duration", "time"];
   const hangs: HangEvent[] = rows.map((row) => {
-    const durationMs = extractDurationMs(row);
+    const durationMs = extractDurationMs(row, durationKeys);
     return {
       duration: `${durationMs}ms`,
       durationMs,
@@ -64,40 +65,6 @@ export function parseHangs(tocXml: string, tableXml: string): HangsResult {
 }
 
 // ── Hangs specific helpers ──────────────────────────────────────────
-
-function extractDurationMs(row: Row): number {
-  for (const key of ["duration", "hang-duration", "hitch-duration", "time"]) {
-    const val = row[key] ?? row[`@_${key}`];
-    if (val == null) continue;
-
-    // Object form: { "#text": nanoseconds, "@_fmt": "500 ms" }
-    if (isRow(val)) {
-      // Prefer formatted string — it's unambiguous
-      const fmt = val["@_fmt"];
-      if (typeof fmt === "string") {
-        const ms = parseFmtDuration(fmt);
-        if (ms > 0) return ms;
-      }
-      // Fall back to raw #text value (nanoseconds in xctrace)
-      const rawText = val["#text"];
-      if (rawText != null) {
-        const ns = Number(rawText);
-        if (!isNaN(ns)) return ns / 1_000_000;
-      }
-      continue;
-    }
-
-    // Plain numeric value
-    const num = Number(val);
-    if (!isNaN(num)) {
-      // xctrace nanosecond values are >= 1_000_000 (1ms).
-      // Realistic hang durations in ms are < 100_000 (100s).
-      // Use 1_000_000 as threshold: above = nanoseconds, at or below = milliseconds.
-      return num >= 1_000_000 ? num / 1_000_000 : num;
-    }
-  }
-  return 0;
-}
 
 function extractBacktrace(row: Row): string[] | undefined {
   const bt = row["backtrace"] ?? row["stack"];

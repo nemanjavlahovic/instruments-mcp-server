@@ -3,6 +3,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { xctraceExport, xctraceSymbolicate, xctraceRecord } from "../utils/xctrace.js";
 import { findTableXpath as findSchema, findTrackXpath } from "../utils/trace-helpers.js";
 import { parseXml } from "../utils/xml.js";
+import { storeTrace, getTrace, getOrBuildCallTree } from "../utils/trace-store.js";
+import { formatProfileResult } from "../utils/format-output.js";
+import { autoInvestigate } from "../utils/auto-investigate.js";
 
 export function registerAnalyzeTools(server: McpServer): void {
   // ── Analyze existing trace ─────────────────────────────────────
@@ -114,6 +117,7 @@ Total recording time = 5x duration.`,
     },
     async ({ process, device, duration }) => {
       const results: Record<string, unknown> = {};
+      const traceIds: Record<string, string> = {};
 
       // Run Time Profiler
       try {
@@ -126,14 +130,12 @@ Total recording time = 5x duration.`,
         const tocXml = await xctraceExport({ inputPath: cpuTrace, toc: true });
         const { parseTimeProfiler } = await import("../parsers/time-profiler.js");
 
-        // Try time-profile first, fall back to time-sample
         const profileXpath = findSchema(tocXml, "time-profile");
-        const tableXml = profileXpath
+        let cpuTableXml = profileXpath
           ? await xctraceExport({ inputPath: cpuTrace, xpath: profileXpath })
           : tocXml;
 
-        let cpuResult = parseTimeProfiler(tocXml, tableXml);
-        // Deferred mode (xctrace 26+) often leaves time-profile nearly empty
+        let cpuResult = parseTimeProfiler(tocXml, cpuTableXml);
         if (cpuResult.totalSamples < 10) {
           const sampleXpath = findSchema(tocXml, "time-sample");
           if (sampleXpath) {
@@ -141,10 +143,12 @@ Total recording time = 5x duration.`,
             const sampleResult = parseTimeProfiler(tocXml, sampleXml);
             if (sampleResult.totalSamples > cpuResult.totalSamples) {
               cpuResult = sampleResult;
+              cpuTableXml = sampleXml;
             }
           }
         }
         results.cpu = cpuResult;
+        traceIds.cpu = storeTrace({ tracePath: cpuTrace, template: "Time Profiler", tableXml: cpuTableXml, parsedResult: cpuResult as unknown as Record<string, unknown> });
       } catch (e) {
         results.cpu = { error: String(e) };
       }
@@ -159,12 +163,13 @@ Total recording time = 5x duration.`,
         });
         const tocXml = await xctraceExport({ inputPath: hitchTrace, toc: true });
         const tableXpath = findSchema(tocXml, "hang") || findSchema(tocXml, "hitch");
-        const tableXml = tableXpath
+        const hitchTableXml = tableXpath
           ? await xctraceExport({ inputPath: hitchTrace, xpath: tableXpath })
           : tocXml;
 
         const { parseHangs } = await import("../parsers/hangs.js");
-        results.hitches = parseHangs(tocXml, tableXml);
+        results.hitches = parseHangs(tocXml, hitchTableXml);
+        traceIds.hitches = storeTrace({ tracePath: hitchTrace, template: "Animation Hitches", tableXml: hitchTableXml, parsedResult: results.hitches as Record<string, unknown> });
       } catch (e) {
         results.hitches = { error: String(e) };
       }
@@ -182,12 +187,13 @@ Total recording time = 5x duration.`,
           findSchema(tocXml, "leak") ||
           findTrackXpath(tocXml, "leak") ||
           findSchema(tocXml, "alloc");
-        const tableXml = tableXpath
+        const leaksTableXml = tableXpath
           ? await xctraceExport({ inputPath: leaksTrace, xpath: tableXpath })
           : tocXml;
 
         const { parseLeaks } = await import("../parsers/leaks.js");
-        results.leaks = parseLeaks(tocXml, tableXml);
+        results.leaks = parseLeaks(tocXml, leaksTableXml);
+        traceIds.leaks = storeTrace({ tracePath: leaksTrace, template: "Leaks", tableXml: leaksTableXml, parsedResult: results.leaks as Record<string, unknown> });
       } catch (e) {
         results.leaks = { error: String(e) };
       }
@@ -206,12 +212,13 @@ Total recording time = 5x duration.`,
           findSchema(tocXml, "power") ||
           findSchema(tocXml, "battery") ||
           findSchema(tocXml, "diagnostics");
-        const tableXml = tableXpath
+        const energyTableXml = tableXpath
           ? await xctraceExport({ inputPath: energyTrace, xpath: tableXpath })
           : tocXml;
 
         const { parseEnergy } = await import("../parsers/energy.js");
-        results.energy = parseEnergy(tocXml, tableXml);
+        results.energy = parseEnergy(tocXml, energyTableXml);
+        traceIds.energy = storeTrace({ tracePath: energyTrace, template: "Energy Log", tableXml: energyTableXml, parsedResult: results.energy as Record<string, unknown> });
       } catch (e) {
         results.energy = { error: String(e) };
       }
@@ -230,34 +237,70 @@ Total recording time = 5x duration.`,
           findSchema(tocXml, "network") ||
           findTrackXpath(tocXml, "http") ||
           findTrackXpath(tocXml, "network");
-        const tableXml = tableXpath
+        const networkTableXml = tableXpath
           ? await xctraceExport({ inputPath: networkTrace, xpath: tableXpath })
           : tocXml;
 
         const { parseNetwork } = await import("../parsers/network.js");
-        results.network = parseNetwork(tocXml, tableXml);
+        results.network = parseNetwork(tocXml, networkTableXml);
+        traceIds.network = storeTrace({ tracePath: networkTrace, template: "Network", tableXml: networkTableXml, parsedResult: results.network as Record<string, unknown> });
       } catch (e) {
         results.network = { error: String(e) };
       }
 
-      // Compute overall severity across all results
       const overallSeverity = computeOverallSeverity(results);
+
+      // Build compact audit report
+      const templateMap: Record<string, { template: string; tracePath: string }> = {
+        cpu: { template: "Time Profiler", tracePath: "" },
+        hitches: { template: "Animation Hitches", tracePath: "" },
+        leaks: { template: "Leaks", tracePath: "" },
+        energy: { template: "Energy Log", tracePath: "" },
+        network: { template: "Network", tracePath: "" },
+      };
+
+      const sections: string[] = [];
+      sections.push(`=== Performance Audit ===  process: ${process}  duration/profile: ${duration}  overall: ${overallSeverity.toUpperCase()}`);
+      sections.push("");
+
+      for (const [key, info] of Object.entries(templateMap)) {
+        const r = results[key];
+        if (!r || (r as { error?: string }).error) {
+          sections.push(`--- ${info.template}: ERROR ---`);
+          sections.push((r as { error?: string })?.error || "Failed to record");
+          sections.push("");
+          continue;
+        }
+
+        const traceId = traceIds[key];
+        const trace = traceId ? getTrace(traceId) : null;
+        const tracePath = trace?.tracePath || "";
+
+        // Format the profile section
+        sections.push(formatProfileResult(info.template, r as Record<string, unknown>, traceId || "?", tracePath));
+        sections.push("");
+
+        // Add investigation
+        const callTree = trace ? getOrBuildCallTree(trace) : null;
+        const investigation = autoInvestigate(info.template, r as Record<string, unknown>, callTree, traceId);
+        if (investigation) {
+          sections.push(investigation);
+          if (trace) trace.investigation = investigation;
+        }
+        sections.push("");
+      }
+
+      // Trace IDs summary
+      sections.push("=== Trace IDs ===");
+      for (const [key, id] of Object.entries(traceIds)) {
+        sections.push(`  ${key}: ${id}`);
+      }
 
       return {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(
-              {
-                audit: "performance",
-                process,
-                durationPerProfile: duration,
-                overallSeverity,
-                results,
-              },
-              null,
-              2
-            ),
+            text: sections.join("\n"),
           },
         ],
       };

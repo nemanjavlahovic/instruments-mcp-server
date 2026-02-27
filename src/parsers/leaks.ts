@@ -1,5 +1,9 @@
 import { parseXml } from "../utils/xml.js";
-import { extractRows, extractStr, extractFmt, extractNum, parseSizeFmt, formatBytes, isRow, type Row } from "../utils/extractors.js";
+import {
+  extractRows, extractStr, extractFmt, extractNum,
+  extractFirstStrOrFmt, extractFirstNum,
+  parseSizeFmt, formatBytes, isRow, type Row,
+} from "../utils/extractors.js";
 
 export interface LeakGroup {
   objectType: string;
@@ -104,11 +108,7 @@ export function parseLeaks(tocXml: string, tableXml: string): LeaksResult {
 // ── Leaks specific field extraction ─────────────────────────────────
 
 function extractObjectType(row: Row): string | null {
-  for (const key of ["leaked-object", "leakedObject", "object", "type", "category", "class", "name", "allocation-type"]) {
-    const val = extractStr(row, key) || extractFmt(row, key);
-    if (val) return val;
-  }
-  return null;
+  return extractFirstStrOrFmt(row, ["leaked-object", "leakedObject", "object", "type", "category", "class", "name", "allocation-type"]);
 }
 
 function extractSize(row: Row): number {
@@ -163,11 +163,8 @@ function extractFrame(row: Row): string | null {
 }
 
 function extractCount(row: Row): number {
-  for (const key of ["count", "instances", "leak-count"]) {
-    const val = extractNum(row, key);
-    if (val != null && val > 0) return val;
-  }
-  return 1;
+  const val = extractFirstNum(row, ["count", "instances", "leak-count"]);
+  return val != null && val > 0 ? val : 1;
 }
 
 // ── Library aggregation ─────────────────────────────────────────────

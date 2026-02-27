@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { xctraceRecord, xctraceExport, getTraceOutputDir, spawnXctraceRecord, type ActiveRecording } from "../utils/xctrace.js";
-import { findTableXpath, findTrackXpath, sleep } from "../utils/trace-helpers.js";
+import { xctraceRecord, getTraceOutputDir, spawnXctraceRecord, type ActiveRecording } from "../utils/xctrace.js";
+import { sleep } from "../utils/trace-helpers.js";
+import { parseTraceByTemplate } from "../utils/parse-trace.js";
+import { formatProfileResult } from "../utils/format-output.js";
 import {
   resolveDevice,
   simctlListBooted,
@@ -53,6 +55,44 @@ const scenarioStepSchema = z.discriminatedUnion("action", [
     action: z.literal("set_location"),
     latitude: z.number().describe("GPS latitude"),
     longitude: z.number().describe("GPS longitude"),
+  }),
+  // UI automation steps (require AXe CLI)
+  z.object({
+    action: z.literal("tap"),
+    id: z.string().optional().describe("Accessibility identifier to tap"),
+    label: z.string().optional().describe("Accessibility label to tap"),
+    x: z.number().optional().describe("X coordinate to tap"),
+    y: z.number().optional().describe("Y coordinate to tap"),
+  }),
+  z.object({
+    action: z.literal("type_text"),
+    text: z.string().describe("Text to type into the focused field"),
+  }),
+  z.object({
+    action: z.literal("swipe"),
+    start_x: z.number().describe("Start X coordinate"),
+    start_y: z.number().describe("Start Y coordinate"),
+    end_x: z.number().describe("End X coordinate"),
+    end_y: z.number().describe("End Y coordinate"),
+    duration: z.number().optional().describe("Swipe duration in seconds"),
+  }),
+  z.object({
+    action: z.literal("gesture"),
+    preset: z.enum([
+      "scroll-up", "scroll-down", "scroll-left", "scroll-right",
+      "swipe-from-left-edge", "swipe-from-right-edge",
+      "swipe-from-top-edge", "swipe-from-bottom-edge",
+    ]).describe("Gesture preset name"),
+  }),
+  z.object({
+    action: z.literal("snapshot_ui"),
+    label: z.string().optional().describe("Label for this snapshot in the log"),
+  }),
+  z.object({
+    action: z.literal("long_press"),
+    x: z.number().describe("X coordinate"),
+    y: z.number().describe("Y coordinate"),
+    duration_ms: z.number().optional().describe("Hold duration in milliseconds (default: 1000)"),
   }),
 ]);
 
@@ -476,12 +516,12 @@ Returns the same parsed performance data as the profile_* tools.`,
     "profile_scenario",
     `Record an Instruments trace WHILE executing a scenario on a simulator.
 This is the primary tool for profiling real user flows — it launches your app,
-runs interaction steps (deep links, push notifications, waits), and records
-performance data throughout.
+runs interaction steps, and records performance data throughout.
 
 Steps execute sequentially after xctrace starts recording.
-Uses deep links (open_url) for navigation since simctl has no tap/swipe.
-The app must register URL schemes in Info.plist for deep link navigation.
+Supports both simctl steps (deep links, push, appearance, location) and
+UI automation steps (tap, type_text, swipe, gesture, long_press, snapshot_ui)
+powered by AXe CLI. UI steps require AXe: brew tap cameroncooke/axe && brew install axe
 
 Returns: Parsed profile results + screenshots taken + scenario execution log.`,
     {
@@ -597,6 +637,55 @@ Returns: Parsed profile results + screenshots taken + scenario execution log.`,
                 await simctlSetLocation(sim.udid, step.latitude, step.longitude);
                 log.push({ step: `set_location(${step.latitude},${step.longitude})`, timestamp: stepStart });
                 break;
+              // UI automation steps (lazy-load AXe)
+              case "tap": {
+                const axe = await import("../utils/axe.js");
+                await axe.axeTap(sim.udid, { id: step.id, label: step.label, x: step.x, y: step.y });
+                const target = step.id ? `id="${step.id}"` : step.label ? `label="${step.label}"` : `(${step.x},${step.y})`;
+                log.push({ step: `tap(${target})`, timestamp: stepStart });
+                break;
+              }
+              case "type_text": {
+                const axe = await import("../utils/axe.js");
+                await axe.axeType(sim.udid, step.text);
+                log.push({ step: `type_text("${step.text.slice(0, 50)}")`, timestamp: stepStart });
+                break;
+              }
+              case "swipe": {
+                const axe = await import("../utils/axe.js");
+                await axe.axeSwipe(sim.udid, {
+                  startX: step.start_x, startY: step.start_y,
+                  endX: step.end_x, endY: step.end_y,
+                  duration: step.duration,
+                });
+                log.push({ step: `swipe(${step.start_x},${step.start_y}→${step.end_x},${step.end_y})`, timestamp: stepStart });
+                break;
+              }
+              case "gesture": {
+                const axe = await import("../utils/axe.js");
+                await axe.axeGesture(sim.udid, step.preset as import("../utils/axe.js").AxeGesturePreset);
+                log.push({ step: `gesture(${step.preset})`, timestamp: stepStart });
+                break;
+              }
+              case "snapshot_ui": {
+                const axe = await import("../utils/axe.js");
+                const { parseAndCompact } = await import("./ui.js");
+                const snapshot = await axe.axeDescribeUI(sim.udid);
+                const compacted = parseAndCompact(snapshot);
+                const snapshotLabel = step.label || `step-${log.length}`;
+                const summary = typeof compacted === "string"
+                  ? compacted.slice(0, 300)
+                  : `${compacted.totalElements} elements${compacted.truncated ? " (truncated)" : ""}`;
+                log.push({ step: `snapshot_ui(${snapshotLabel})`, timestamp: stepStart, result: summary });
+                break;
+              }
+              case "long_press": {
+                const axe = await import("../utils/axe.js");
+                const durationSec = (step.duration_ms ?? 1000) / 1000;
+                await axe.axeTouch(sim.udid, { x: step.x, y: step.y, durationSeconds: durationSec });
+                log.push({ step: `long_press(${step.x},${step.y},${step.duration_ms ?? 1000}ms)`, timestamp: stepStart });
+                break;
+              }
             }
           } catch (e) {
             log.push({ step: step.action, timestamp: stepStart, error: String(e) });
@@ -610,19 +699,29 @@ Returns: Parsed profile results + screenshots taken + scenario execution log.`,
         // 8. Parse results based on template
         const results = await parseTraceByTemplate(tracePath, template);
 
+        // 9. Format as compact text (not raw JSON)
+        const profileText = formatProfileResult(template, results as unknown as Record<string, unknown>, "scenario", tracePath);
+
+        // Build compact scenario log with relative timestamps
+        const scenarioStart = log[0]?.timestamp ?? Date.now();
+        const logLines = log.map((entry) => {
+          const relMs = entry.timestamp - scenarioStart;
+          const rel = relMs < 1000 ? `${relMs}ms` : `${(relMs / 1000).toFixed(1)}s`;
+          const parts = [`+${rel} ${entry.step}`];
+          if (entry.result) parts.push(entry.result);
+          if (entry.error) parts.push(`ERROR: ${entry.error}`);
+          return parts.join("  ");
+        });
+
+        const scenarioText = [
+          `--- Scenario ---  device: ${sim.name}  steps: ${scenario.length}${screenshots.length ? `  screenshots: ${screenshots.length}` : ""}`,
+          ...logLines,
+        ].join("\n");
+
         return {
           content: [{
             type: "text" as const,
-            text: JSON.stringify(
-              {
-                ...results,
-                tracePath,
-                device: { name: sim.name, udid: sim.udid, runtime: sim.runtime },
-                scenario: { stepCount: scenario.length, screenshots, log },
-              },
-              null,
-              2
-            ),
+            text: `${profileText}\n\n${scenarioText}`,
           }],
         };
       } catch (e) {
@@ -632,97 +731,3 @@ Returns: Parsed profile results + screenshots taken + scenario execution log.`,
   );
 }
 
-// ── Template → Parser routing ──────────────────────────────────────
-
-async function parseTraceByTemplate(tracePath: string, template: string): Promise<Record<string, unknown>> {
-  const tocXml = await xctraceExport({ inputPath: tracePath, toc: true });
-  const t = template.toLowerCase();
-
-  if (t.includes("time profiler") || t.includes("time-profiler")) {
-    const { parseTimeProfiler } = await import("../parsers/time-profiler.js");
-    const profileXpath = findTableXpath(tocXml, "time-profile");
-    const tableXml = profileXpath ? await xctraceExport({ inputPath: tracePath, xpath: profileXpath }) : tocXml;
-    let result = parseTimeProfiler(tocXml, tableXml);
-    // Deferred mode fallback (xctrace 26+)
-    if (result.totalSamples < 10) {
-      const sampleXpath = findTableXpath(tocXml, "time-sample");
-      if (sampleXpath) {
-        const sampleXml = await xctraceExport({ inputPath: tracePath, xpath: sampleXpath });
-        const sampleResult = parseTimeProfiler(tocXml, sampleXml);
-        if (sampleResult.totalSamples > result.totalSamples) result = sampleResult;
-      }
-    }
-    return result as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("swiftui")) {
-    const { parseSwiftUI } = await import("../parsers/swiftui.js");
-    const xpath = findTableXpath(tocXml, "view-body") || findTableXpath(tocXml, "swiftui");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseSwiftUI(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("alloc")) {
-    const { parseAllocations } = await import("../parsers/allocations.js");
-    const xpath = findTableXpath(tocXml, "alloc");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseAllocations(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("hitch") || t.includes("animation")) {
-    const { parseHangs } = await import("../parsers/hangs.js");
-    const xpath = findTableXpath(tocXml, "hang") || findTableXpath(tocXml, "hitch");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseHangs(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("launch") || t.includes("app launch")) {
-    const { parseAppLaunch } = await import("../parsers/app-launch.js");
-    const xpath =
-      findTableXpath(tocXml, "app-launch") ||
-      findTableXpath(tocXml, "lifecycle") ||
-      findTableXpath(tocXml, "os-signpost") ||
-      findTableXpath(tocXml, "signpost");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseAppLaunch(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("energy")) {
-    const { parseEnergy } = await import("../parsers/energy.js");
-    const xpath =
-      findTableXpath(tocXml, "energy") ||
-      findTableXpath(tocXml, "power") ||
-      findTableXpath(tocXml, "battery") ||
-      findTableXpath(tocXml, "diagnostics");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseEnergy(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("leak")) {
-    const { parseLeaks } = await import("../parsers/leaks.js");
-    const xpath =
-      findTableXpath(tocXml, "leak") ||
-      findTrackXpath(tocXml, "leak") ||
-      findTableXpath(tocXml, "alloc");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseLeaks(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  if (t.includes("network")) {
-    const { parseNetwork } = await import("../parsers/network.js");
-    const xpath =
-      findTableXpath(tocXml, "http") ||
-      findTableXpath(tocXml, "network") ||
-      findTrackXpath(tocXml, "http") ||
-      findTrackXpath(tocXml, "network");
-    const tableXml = xpath ? await xctraceExport({ inputPath: tracePath, xpath }) : tocXml;
-    return parseNetwork(tocXml, tableXml) as unknown as Record<string, unknown>;
-  }
-
-  // Unknown template — return raw TOC
-  return {
-    template,
-    toc: tocXml,
-    hint: "No dedicated parser for this template. Use analyze_trace with the tracePath to drill into specific tables.",
-  };
-}
