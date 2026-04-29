@@ -1,7 +1,11 @@
-# InstrumentsMCP
+<p align="center">
+  <img src="instrumentsmcp-icon.svg" alt="InstrumentsMCP icon" width="152" />
+</p>
+
+<h1 align="center">InstrumentsMCP</h1>
 
 <p align="center">
-  <img src="instruments-cover.png" alt="InstrumentsMCP" width="720" />
+  <strong>Profiler data for agents.</strong>
 </p>
 
 <p align="center">
@@ -11,7 +15,7 @@
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-compatible-purple" alt="MCP"></a>
 </p>
 
-MCP server that wraps Xcode Instruments. Record traces, automate the simulator, parse results — find out what's slow without opening Instruments.
+MCP server that wraps Xcode Instruments. Record traces, automate the simulator, and return structured profiling data your coding agent can act on.
 
 ## Quick Start
 

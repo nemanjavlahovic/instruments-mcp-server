@@ -1,0 +1,9 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">InstrumentsMCP icon</title>
+  <desc id="desc">Minimal rounded-square profiler trace mark with a terminal handoff node.</desc>
+  <rect x="36" y="36" width="184" height="184" rx="20" fill="#141718" stroke="#30363A" stroke-width="4"/>
+  <rect x="60" y="60" width="136" height="136" rx="10" fill="#151819" stroke="#2B3134" stroke-width="3"/>
+  <path d="M84 133H109.5L128 86L154 169L176.5 113L193 133H208" stroke="#C7D8EA" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="208" cy="133" r="8" fill="#C7D8EA"/>
+  <circle cx="208" cy="133" r="2.5" fill="#8EA8C2"/>
+</svg>
