@@ -56,10 +56,10 @@ export function parseTimeProfiler(tocXml: string, tableXml: string): TimeProfile
     };
   }
 
-  // Detect format: time-profile has `weight` and `backtrace` (with function names)
+  // Detect format: time-profile has `weight` and `tagged-backtrace` (with function names)
   // time-sample has `kperf-bt` (raw addresses) and no `weight`
   const firstRow = rows[0];
-  const hasAggregatedData = firstRow && ("weight" in firstRow || "backtrace" in firstRow);
+  const hasAggregatedData = firstRow && ("weight" in firstRow || "tagged-backtrace" in firstRow || "backtrace" in firstRow);
   const isTimeSampleFormat = !hasAggregatedData && firstRow && ("kperf-bt" in firstRow || "time-sample-kind" in firstRow);
 
   if (isTimeSampleFormat) {
@@ -262,7 +262,9 @@ interface FrameInfo {
 }
 
 function extractBacktraceFrames(row: Row): FrameInfo[] {
-  let bt = row["backtrace"];
+  // xctrace's time-profile table wraps it: <tagged-backtrace><backtrace>
+  const tagged = row["tagged-backtrace"];
+  let bt = isRow(tagged) ? tagged["backtrace"] : row["backtrace"];
   if (!bt) return [];
   if (Array.isArray(bt)) bt = bt[0];
   if (!isRow(bt)) return [];
