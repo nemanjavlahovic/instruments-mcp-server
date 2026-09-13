@@ -71,6 +71,55 @@ describe("parseTimeProfiler", () => {
     expect(result.summary).toBeTruthy();
   });
 
+  it("parses real xctrace time-profile rows (tagged-backtrace, id/ref back-references)", () => {
+    // Shape taken from `xctrace export` (xctrace 16.0): the backtrace sits inside
+    // <tagged-backtrace>, and every repeated element is written once with id=""
+    // and afterwards only as <element ref=""/>.
+    const tableXml = wrapRows(`
+      <row>
+        <sample-time id="1" fmt="00:01.127.101">1127101000</sample-time>
+        <thread id="2" fmt="Main Thread 0x15a9fd83 (probe, pid: 69511)"><tid id="3" fmt="0x15a9fd83">363462019</tid></thread>
+        <weight id="9" fmt="1.00 ms">1000000</weight>
+        <tagged-backtrace id="64" fmt="_malloc_zone_malloc ← (2 other frames)">
+          <backtrace id="65">
+            <frame id="66" name="_malloc_zone_malloc" addr="0x184c9a089"><binary id="67" name="libsystem_malloc.dylib"/></frame>
+            <frame id="71" name="slowRecordIndex(_:)" addr="0x10237ce08"><binary id="69" name="probe"/><source line="8"><path id="72">/src/probe.swift</path></source></frame>
+            <frame id="75" name="main" addr="0x10237e820"><binary ref="69"/><source line="0"><path ref="72"/></source></frame>
+          </backtrace>
+        </tagged-backtrace>
+      </row>
+      <row>
+        <sample-time id="131" fmt="00:01.137.101">1137101750</sample-time>
+        <thread ref="2"/>
+        <weight ref="9"/>
+        <tagged-backtrace ref="64"/>
+      </row>
+      <row>
+        <sample-time id="140" fmt="00:01.138.101">1138101750</sample-time>
+        <thread ref="2"/>
+        <weight ref="9"/>
+        <tagged-backtrace id="141" fmt="slowRecordIndex(_:) ← (1 other frame)">
+          <backtrace id="142"><frame ref="71"/><frame ref="75"/></backtrace>
+        </tagged-backtrace>
+      </row>
+    `);
+
+    const result = parseTimeProfiler(EMPTY_TOC, tableXml);
+
+    expect(result.totalSamples).toBe(3);
+    expect(result.needsSymbolication).toBe(false);
+    expect(result.summary).not.toContain("unsymbolicated");
+
+    expect(result.hotspots[0].function).toBe("_malloc_zone_malloc");
+    expect(result.hotspots[0].selfWeight).toBe(2);
+
+    const own = result.hotspots.find((h) => h.function === "slowRecordIndex(_:)");
+    expect(own).toBeDefined();
+    expect(own!.module).toBe("probe");
+    expect(own!.selfWeight).toBe(1);
+    expect(own!.totalWeight).toBe(3);
+  });
+
   it("parses time-sample rows (Deferred mode, raw addresses)", () => {
     const tableXml = wrapRows(`
       <row>
